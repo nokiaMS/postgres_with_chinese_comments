@@ -13,6 +13,52 @@
  *-------------------------------------------------------------------------
  */
 
+/*
+ * data.c实现了sql标准的date和time数据类型。
+ *		io函数：
+ *			in函数
+ *			out函数
+ *			recv函数
+ *			send函数
+ *		比较函数：
+ *			ge - date >= date
+ *			gt - date > date
+ *			lt - date < date
+ *			le - date <= date
+ *			eq - date = date
+ *			ne - date != date
+ *			date_cmp - date比较函数，返回-1,0,1
+ *			date_larger - 返回两个date值中大的一个。
+ *			date_smaller - 返回两个date值中小的一个。
+ *			timestamp_eq_date
+ *			timestamp_ne_date
+ *			timestamp_lt_date
+ *			timestamp_le_date
+ *			timestamp_ge_date
+ *			timestamp_gt_date
+ *			timestamp_cmp_date - 返回-1,0,1
+*			timestamptz_eq_date
+ *			timestamptz_ne_date
+ *			timestamptz_lt_date
+ *			timestamptz_le_date
+ *			timestamptz_ge_date
+ *			timestamptz_gt_date
+ *			timestamptz_cmp_date - 返回-1,0,1
+ *		日期计算：
+ *			date_mi - date-date
+ *			date_pli - date + x days
+ *			date_mii - date - x days
+ *			date_pl_interval - date + interval支持函数
+ *			date_mi_interval - date - interval支持函数
+ *		转换函数：
+ *			date_timestamp - date转timestamp
+ *			timestamp_date
+ *			date_timestamptz
+ *			timestamptz_date
+ *			timestamp_cmp_date - 返回-1,0,1
+ *
+ */
+
 #include "postgres.h"
 
 #include <ctype.h>
@@ -103,11 +149,11 @@ anytime_typmodout(bool istz, int32 typmod)
 
 
 /*****************************************************************************
- *	 Date ADT
+ *	 Date ADT - date数据类型的实现接口。
  *****************************************************************************/
 
 
-/* date_in()
+/* date_in() - in函数。
  * Given date text string, convert to internal date format.
  */
 Datum
@@ -178,7 +224,7 @@ date_in(PG_FUNCTION_ARGS)
 	PG_RETURN_DATEADT(date);
 }
 
-/* date_out()
+/* date_out() - out函数。
  * Given internal format date, convert to text string.
  */
 Datum
@@ -204,7 +250,7 @@ date_out(PG_FUNCTION_ARGS)
 }
 
 /*
- *		date_recv			- converts external binary format to date
+ *		date_recv			- converts external binary format to date - recv函数。
  */
 Datum
 date_recv(PG_FUNCTION_ARGS)
@@ -226,7 +272,7 @@ date_recv(PG_FUNCTION_ARGS)
 }
 
 /*
- *		date_send			- converts date to binary format
+ *		date_send			- converts date to binary format - send函数。
  */
 Datum
 date_send(PG_FUNCTION_ARGS)
@@ -386,7 +432,7 @@ GetSQLLocalTime(int32 typmod)
 /*
  * Comparison functions for dates
  */
-
+// eq比较函数。
 Datum
 date_eq(PG_FUNCTION_ARGS)
 {
@@ -396,6 +442,7 @@ date_eq(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(dateVal1 == dateVal2);
 }
 
+// ne比较函数。
 Datum
 date_ne(PG_FUNCTION_ARGS)
 {
@@ -405,6 +452,7 @@ date_ne(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(dateVal1 != dateVal2);
 }
 
+// lt比较函数。
 Datum
 date_lt(PG_FUNCTION_ARGS)
 {
@@ -414,6 +462,7 @@ date_lt(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(dateVal1 < dateVal2);
 }
 
+// le比较函数。
 Datum
 date_le(PG_FUNCTION_ARGS)
 {
@@ -423,6 +472,7 @@ date_le(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(dateVal1 <= dateVal2);
 }
 
+// gt比较函数。
 Datum
 date_gt(PG_FUNCTION_ARGS)
 {
@@ -432,6 +482,7 @@ date_gt(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(dateVal1 > dateVal2);
 }
 
+// ge比较函数。
 Datum
 date_ge(PG_FUNCTION_ARGS)
 {
@@ -441,6 +492,7 @@ date_ge(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(dateVal1 >= dateVal2);
 }
 
+//date比较函数，返回 -1,0,1。
 Datum
 date_cmp(PG_FUNCTION_ARGS)
 {
@@ -528,6 +580,7 @@ date_finite(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(!DATE_NOT_FINITE(date));
 }
 
+//date的larger函数，返回两个中大的date值。
 Datum
 date_larger(PG_FUNCTION_ARGS)
 {
@@ -537,6 +590,7 @@ date_larger(PG_FUNCTION_ARGS)
 	PG_RETURN_DATEADT((dateVal1 > dateVal2) ? dateVal1 : dateVal2);
 }
 
+//date的smaller函数，返回两个中小的date值。
 Datum
 date_smaller(PG_FUNCTION_ARGS)
 {
@@ -547,6 +601,7 @@ date_smaller(PG_FUNCTION_ARGS)
 }
 
 /* Compute difference between two dates in days.
+ * date-date 减法支持函数。
  */
 Datum
 date_mi(PG_FUNCTION_ARGS)
@@ -564,6 +619,7 @@ date_mi(PG_FUNCTION_ARGS)
 
 /* Add a number of days to a date, giving a new date.
  * Must handle both positive and negative numbers of days.
+ * date + x天，加法支持函数。
  */
 Datum
 date_pli(PG_FUNCTION_ARGS)
@@ -588,6 +644,7 @@ date_pli(PG_FUNCTION_ARGS)
 }
 
 /* Subtract a number of days from a date, giving a new date.
+ * date + x天 支持函数。
  */
 Datum
 date_mii(PG_FUNCTION_ARGS)
@@ -968,6 +1025,7 @@ date_cmp_timestamptz(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(date_cmp_timestamptz_internal(dateVal, dt2));
 }
 
+//timestamp = date.
 Datum
 timestamp_eq_date(PG_FUNCTION_ARGS)
 {
@@ -977,6 +1035,7 @@ timestamp_eq_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt1) == 0);
 }
 
+//timestamp != date.
 Datum
 timestamp_ne_date(PG_FUNCTION_ARGS)
 {
@@ -986,6 +1045,7 @@ timestamp_ne_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt1) != 0);
 }
 
+//timestamp < date.
 Datum
 timestamp_lt_date(PG_FUNCTION_ARGS)
 {
@@ -995,6 +1055,7 @@ timestamp_lt_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt1) > 0);
 }
 
+//timestamp > date.
 Datum
 timestamp_gt_date(PG_FUNCTION_ARGS)
 {
@@ -1004,6 +1065,7 @@ timestamp_gt_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt1) < 0);
 }
 
+//timestamp <= date.
 Datum
 timestamp_le_date(PG_FUNCTION_ARGS)
 {
@@ -1013,6 +1075,7 @@ timestamp_le_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt1) >= 0);
 }
 
+//timestamp >= date.
 Datum
 timestamp_ge_date(PG_FUNCTION_ARGS)
 {
@@ -1022,6 +1085,7 @@ timestamp_ge_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt1) <= 0);
 }
 
+//timestamp与date比较，返回-1,0，1
 Datum
 timestamp_cmp_date(PG_FUNCTION_ARGS)
 {
@@ -1031,6 +1095,7 @@ timestamp_cmp_date(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(-date_cmp_timestamp_internal(dateVal, dt1));
 }
 
+//tmtz = date
 Datum
 timestamptz_eq_date(PG_FUNCTION_ARGS)
 {
@@ -1040,6 +1105,7 @@ timestamptz_eq_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamptz_internal(dateVal, dt1) == 0);
 }
 
+//tmtz != date
 Datum
 timestamptz_ne_date(PG_FUNCTION_ARGS)
 {
@@ -1049,6 +1115,7 @@ timestamptz_ne_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamptz_internal(dateVal, dt1) != 0);
 }
 
+//tmtz < date
 Datum
 timestamptz_lt_date(PG_FUNCTION_ARGS)
 {
@@ -1058,6 +1125,7 @@ timestamptz_lt_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamptz_internal(dateVal, dt1) > 0);
 }
 
+//tmtz > date
 Datum
 timestamptz_gt_date(PG_FUNCTION_ARGS)
 {
@@ -1067,6 +1135,7 @@ timestamptz_gt_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamptz_internal(dateVal, dt1) < 0);
 }
 
+//tmtz <= date
 Datum
 timestamptz_le_date(PG_FUNCTION_ARGS)
 {
@@ -1076,6 +1145,7 @@ timestamptz_le_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamptz_internal(dateVal, dt1) >= 0);
 }
 
+//tmtz >= date
 Datum
 timestamptz_ge_date(PG_FUNCTION_ARGS)
 {
@@ -1085,6 +1155,7 @@ timestamptz_ge_date(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamptz_internal(dateVal, dt1) <= 0);
 }
 
+//tmtz比较函数，返回-1,0,1
 Datum
 timestamptz_cmp_date(PG_FUNCTION_ARGS)
 {
@@ -1306,6 +1377,7 @@ extract_date(PG_FUNCTION_ARGS)
  *
  * We implement this by promoting the date to timestamp (without time zone)
  * and then using the timestamp plus interval function.
+ * date + interval函数。
  */
 Datum
 date_pl_interval(PG_FUNCTION_ARGS)
@@ -1326,6 +1398,7 @@ date_pl_interval(PG_FUNCTION_ARGS)
  *
  * We implement this by promoting the date to timestamp (without time zone)
  * and then using the timestamp minus interval function.
+ * date - interval支持函数。
  */
 Datum
 date_mi_interval(PG_FUNCTION_ARGS)
@@ -1343,6 +1416,7 @@ date_mi_interval(PG_FUNCTION_ARGS)
 
 /* date_timestamp()
  * Convert date to timestamp data type.
+ * date转timestamp支持函数。
  */
 Datum
 date_timestamp(PG_FUNCTION_ARGS)
@@ -1357,6 +1431,7 @@ date_timestamp(PG_FUNCTION_ARGS)
 
 /* timestamp_date()
  * Convert timestamp to date data type.
+ * timestamp转date支持函数。
  */
 Datum
 timestamp_date(PG_FUNCTION_ARGS)
@@ -1387,6 +1462,7 @@ timestamp_date(PG_FUNCTION_ARGS)
 
 /* date_timestamptz()
  * Convert date to timestamp with time zone data type.
+ * date转timestamptz支持函数。
  */
 Datum
 date_timestamptz(PG_FUNCTION_ARGS)
@@ -1402,6 +1478,7 @@ date_timestamptz(PG_FUNCTION_ARGS)
 
 /* timestamptz_date()
  * Convert timestamp with time zone to date data type.
+ * timestamptz转date支持函数。
  */
 Datum
 timestamptz_date(PG_FUNCTION_ARGS)
