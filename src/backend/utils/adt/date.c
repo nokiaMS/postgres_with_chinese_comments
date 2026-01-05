@@ -16,20 +16,55 @@
 /*
  * data.c实现了sql标准的date和time数据类型。
  *		io函数：
- *			in函数
- *			out函数
- *			recv函数
- *			send函数
+ *			date io函数：
+ *				in函数
+ *				out函数
+ *				recv函数
+ *				send函数
+ *			time io函数：
+ *				in函数
+ *				out函数
+ *				recv函数
+ *				in函数
+ *			timetz io函数：
+*				in函数
+ *				out函数
+ *				recv函数
+ *				in函数
  *		比较函数：
- *			ge - date >= date
- *			gt - date > date
- *			lt - date < date
- *			le - date <= date
- *			eq - date = date
- *			ne - date != date
+ *			date比较函数：
+ *				ge - date >= date
+ *				gt - date > date
+ *				lt - date < date
+ *				le - date <= date
+ *				eq - date = date
+ *				ne - date != date
+ *			time比较函数：
+ *				ge - time >= time
+ *				gt - time > time
+ *				lt - time < time
+ *				le - time <= time
+ *				eq - time = time
+ *				ne - time != time
+*			timetz比较函数：
+ *				ge - timetz >= timetz
+ *				gt - timetz > timetz
+ *				lt - timetz < timetz
+ *				le - timetz <= timetz
+ *				eq - timetz = timetz
+ *				ne - timetz != timetz
+ *
  *			date_cmp - date比较函数，返回-1,0,1
+ *			time_cmp - time比较函数，返回-1,0,1
+ *			timetz_cmp - timetz比较函数，返回-1,0,1
+ *
  *			date_larger - 返回两个date值中大的一个。
  *			date_smaller - 返回两个date值中小的一个。
+ *			time_larger - 返回两个time值中大的一个。
+ *			time_smaller - 返回两个time值中小的一个。
+ *			timetz_larger - 返回两个timetz值中大的一个。
+ *			timetz_smaller - 返回两个timetz值中小的一个。
+ *
  *			timestamp_eq_date
  *			timestamp_ne_date
  *			timestamp_lt_date
@@ -37,6 +72,7 @@
  *			timestamp_ge_date
  *			timestamp_gt_date
  *			timestamp_cmp_date - 返回-1,0,1
+ *
 *			timestamptz_eq_date
  *			timestamptz_ne_date
  *			timestamptz_lt_date
@@ -50,13 +86,30 @@
  *			date_mii - date - x days
  *			date_pl_interval - date + interval支持函数
  *			date_mi_interval - date - interval支持函数
+ *			time_mi_time - time-time函数。
+ *			time_pl_interval - time+interval函数。
+ *			timetz_pl_interval - timetz+interval函数。
+ *			timetz_mi_interval - timetz-interval函数。
+ *
+ *			timetz_hash - timetz hash计算函数。
+ *			time_hash - time hash计算函数。
+ *
  *		转换函数：
  *			date_timestamp - date转timestamp
  *			timestamp_date
  *			date_timestamptz
  *			timestamptz_date
  *			timestamp_cmp_date - 返回-1,0,1
- *
+ *			time_interval - time转interval
+ *			interval_time - interval转time类型
+ *			timestamp_time - timestamp转time类型
+ *			timestamptz_time - timestamptz转time类型
+ *			timestamptz_timetz - timestamptz转timetz
+ *			timetz_time
+ *			time_timetz
+ *		内部函数：
+ *			time2tm - time转tm结构。
+ *			tm2time - tm结构转time。
  */
 
 #include "postgres.h"
@@ -1509,9 +1562,9 @@ timestamptz_date(PG_FUNCTION_ARGS)
 
 
 /*****************************************************************************
- *	 Time ADT
+ *	 Time ADT - time数据类型
  *****************************************************************************/
-
+//time的in函数。
 Datum
 time_in(PG_FUNCTION_ARGS)
 {
@@ -1553,6 +1606,7 @@ time_in(PG_FUNCTION_ARGS)
 
 /* tm2time()
  * Convert a tm structure to a time data type.
+ * tm结构转time类型。
  */
 int
 tm2time(struct pg_tm *tm, fsec_t fsec, TimeADT *result)
@@ -1625,6 +1679,7 @@ float_time_overflows(int hour, int min, double sec)
  * Convert time data type to POSIX time structure.
  *
  * Note that only the hour/min/sec/fractional-sec fields are filled in.
+ * time类型值转tm结构。
  */
 int
 time2tm(TimeADT time, struct pg_tm *tm, fsec_t *fsec)
@@ -1639,6 +1694,7 @@ time2tm(TimeADT time, struct pg_tm *tm, fsec_t *fsec)
 	return 0;
 }
 
+//time的out函数。
 Datum
 time_out(PG_FUNCTION_ARGS)
 {
@@ -1658,6 +1714,7 @@ time_out(PG_FUNCTION_ARGS)
 
 /*
  *		time_recv			- converts external binary format to time
+ *		time的recv函数。
  */
 Datum
 time_recv(PG_FUNCTION_ARGS)
@@ -1684,6 +1741,7 @@ time_recv(PG_FUNCTION_ARGS)
 
 /*
  *		time_send			- converts time to binary format
+ *		time的send函数。
  */
 Datum
 time_send(PG_FUNCTION_ARGS)
@@ -1817,7 +1875,7 @@ AdjustTimeForTypmod(TimeADT *time, int32 typmod)
 	}
 }
 
-
+//time = time函数
 Datum
 time_eq(PG_FUNCTION_ARGS)
 {
@@ -1827,6 +1885,7 @@ time_eq(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(time1 == time2);
 }
 
+//time != time函数。
 Datum
 time_ne(PG_FUNCTION_ARGS)
 {
@@ -1836,6 +1895,7 @@ time_ne(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(time1 != time2);
 }
 
+//time < time函数。
 Datum
 time_lt(PG_FUNCTION_ARGS)
 {
@@ -1845,6 +1905,7 @@ time_lt(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(time1 < time2);
 }
 
+//time <= time函数。
 Datum
 time_le(PG_FUNCTION_ARGS)
 {
@@ -1854,6 +1915,7 @@ time_le(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(time1 <= time2);
 }
 
+//time > time函数。
 Datum
 time_gt(PG_FUNCTION_ARGS)
 {
@@ -1863,6 +1925,7 @@ time_gt(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(time1 > time2);
 }
 
+//time >= time函数。
 Datum
 time_ge(PG_FUNCTION_ARGS)
 {
@@ -1872,6 +1935,7 @@ time_ge(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(time1 >= time2);
 }
 
+//time比较函数，返回-1,0,1
 Datum
 time_cmp(PG_FUNCTION_ARGS)
 {
@@ -1885,6 +1949,7 @@ time_cmp(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(0);
 }
 
+//time类型 hash值计算函数。
 Datum
 time_hash(PG_FUNCTION_ARGS)
 {
@@ -1897,6 +1962,8 @@ time_hash_extended(PG_FUNCTION_ARGS)
 	return hashint8extended(fcinfo);
 }
 
+
+//time larger函数，返回较大的time值。
 Datum
 time_larger(PG_FUNCTION_ARGS)
 {
@@ -1906,6 +1973,7 @@ time_larger(PG_FUNCTION_ARGS)
 	PG_RETURN_TIMEADT((time1 > time2) ? time1 : time2);
 }
 
+//time smaller函数，返回较小的time值。
 Datum
 time_smaller(PG_FUNCTION_ARGS)
 {
@@ -2042,6 +2110,7 @@ overlaps_time(PG_FUNCTION_ARGS)
 
 /* timestamp_time()
  * Convert timestamp to time data type.
+ * timestamp转time类型。
  */
 Datum
 timestamp_time(PG_FUNCTION_ARGS)
@@ -2072,6 +2141,7 @@ timestamp_time(PG_FUNCTION_ARGS)
 
 /* timestamptz_time()
  * Convert timestamptz to time data type.
+ * timestamptz转time类型。
  */
 Datum
 timestamptz_time(PG_FUNCTION_ARGS)
@@ -2126,6 +2196,7 @@ datetime_timestamp(PG_FUNCTION_ARGS)
 
 /* time_interval()
  * Convert time to interval data type.
+ * time转interval类型。
  */
 Datum
 time_interval(PG_FUNCTION_ARGS)
@@ -2149,6 +2220,7 @@ time_interval(PG_FUNCTION_ARGS)
  * Therefore, we can just ignore the months field.  It is not real clear
  * what to do with negative intervals, but we choose to subtract the floor,
  * so that, say, '-2 hours' becomes '22:00:00'.
+ * interval转time类型。
  */
 Datum
 interval_time(PG_FUNCTION_ARGS)
@@ -2170,6 +2242,7 @@ interval_time(PG_FUNCTION_ARGS)
 
 /* time_mi_time()
  * Subtract two times to produce an interval.
+ * time - time函数。
  */
 Datum
 time_mi_time(PG_FUNCTION_ARGS)
@@ -2189,6 +2262,7 @@ time_mi_time(PG_FUNCTION_ARGS)
 
 /* time_pl_interval()
  * Add interval to time.
+ * time + interval函数。
  */
 Datum
 time_pl_interval(PG_FUNCTION_ARGS)
@@ -2411,6 +2485,7 @@ tm2timetz(struct pg_tm *tm, fsec_t fsec, int tz, TimeTzADT *result)
 	return 0;
 }
 
+//timetz in函数。
 Datum
 timetz_in(PG_FUNCTION_ARGS)
 {
@@ -2452,6 +2527,7 @@ timetz_in(PG_FUNCTION_ARGS)
 	PG_RETURN_TIMETZADT_P(result);
 }
 
+//timetz out函数。
 Datum
 timetz_out(PG_FUNCTION_ARGS)
 {
@@ -2473,6 +2549,7 @@ timetz_out(PG_FUNCTION_ARGS)
 /*
  *		timetz_recv			- converts external binary format to timetz
  */
+//timetz recv函数。
 Datum
 timetz_recv(PG_FUNCTION_ARGS)
 {
@@ -2509,6 +2586,7 @@ timetz_recv(PG_FUNCTION_ARGS)
 /*
  *		timetz_send			- converts timetz to binary format
  */
+//timetz send函数。
 Datum
 timetz_send(PG_FUNCTION_ARGS)
 {
@@ -2608,6 +2686,7 @@ timetz_cmp_internal(TimeTzADT *time1, TimeTzADT *time2)
 	return 0;
 }
 
+//timetz = timetz
 Datum
 timetz_eq(PG_FUNCTION_ARGS)
 {
@@ -2617,6 +2696,7 @@ timetz_eq(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(timetz_cmp_internal(time1, time2) == 0);
 }
 
+//timetz != timetz
 Datum
 timetz_ne(PG_FUNCTION_ARGS)
 {
@@ -2626,6 +2706,7 @@ timetz_ne(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(timetz_cmp_internal(time1, time2) != 0);
 }
 
+//timetz < timetz
 Datum
 timetz_lt(PG_FUNCTION_ARGS)
 {
@@ -2635,6 +2716,7 @@ timetz_lt(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(timetz_cmp_internal(time1, time2) < 0);
 }
 
+//timetz <= timetz
 Datum
 timetz_le(PG_FUNCTION_ARGS)
 {
@@ -2644,6 +2726,7 @@ timetz_le(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(timetz_cmp_internal(time1, time2) <= 0);
 }
 
+//timetz > timetz
 Datum
 timetz_gt(PG_FUNCTION_ARGS)
 {
@@ -2653,6 +2736,7 @@ timetz_gt(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(timetz_cmp_internal(time1, time2) > 0);
 }
 
+//timetz >= timetz
 Datum
 timetz_ge(PG_FUNCTION_ARGS)
 {
@@ -2662,6 +2746,7 @@ timetz_ge(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(timetz_cmp_internal(time1, time2) >= 0);
 }
 
+//timetz比较函数，返回-1,0,1
 Datum
 timetz_cmp(PG_FUNCTION_ARGS)
 {
@@ -2671,6 +2756,7 @@ timetz_cmp(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(timetz_cmp_internal(time1, time2));
 }
 
+//timetz hash值计算函数。
 Datum
 timetz_hash(PG_FUNCTION_ARGS)
 {
@@ -2703,6 +2789,7 @@ timetz_hash_extended(PG_FUNCTION_ARGS)
 	PG_RETURN_UINT64(thash);
 }
 
+//timetz larger函数，返回较大的timetz值。
 Datum
 timetz_larger(PG_FUNCTION_ARGS)
 {
@@ -2717,6 +2804,7 @@ timetz_larger(PG_FUNCTION_ARGS)
 	PG_RETURN_TIMETZADT_P(result);
 }
 
+//timetz smaller函数，返回较小的timetz值。
 Datum
 timetz_smaller(PG_FUNCTION_ARGS)
 {
@@ -2733,6 +2821,7 @@ timetz_smaller(PG_FUNCTION_ARGS)
 
 /* timetz_pl_interval()
  * Add interval to timetz.
+ * timetz + interval函数。
  */
 Datum
 timetz_pl_interval(PG_FUNCTION_ARGS)
@@ -2760,6 +2849,7 @@ timetz_pl_interval(PG_FUNCTION_ARGS)
 
 /* timetz_mi_interval()
  * Subtract interval from timetz.
+ * timetz - interval函数。
  */
 Datum
 timetz_mi_interval(PG_FUNCTION_ARGS)
@@ -2952,7 +3042,7 @@ overlaps_timetz(PG_FUNCTION_ARGS)
 #undef TIMETZ_LT
 }
 
-
+//timetz转time。
 Datum
 timetz_time(PG_FUNCTION_ARGS)
 {
@@ -2965,7 +3055,7 @@ timetz_time(PG_FUNCTION_ARGS)
 	PG_RETURN_TIMEADT(result);
 }
 
-
+//time转timetz。
 Datum
 time_timetz(PG_FUNCTION_ARGS)
 {
@@ -2991,6 +3081,7 @@ time_timetz(PG_FUNCTION_ARGS)
 
 /* timestamptz_timetz()
  * Convert timestamp to timetz data type.
+ * timestamptz转timetz。
  */
 Datum
 timestamptz_timetz(PG_FUNCTION_ARGS)
