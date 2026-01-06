@@ -13,6 +13,19 @@
  *-------------------------------------------------------------------------
  */
 
+/* timestamp.c中定义了timestamp类型及interval类型的支持函数。
+ * timestamp类型：
+ *		io函数：
+ *		比较函数：
+ *			timestamp_eq
+ *			timestamp_ne
+ *			timestamp_gt
+ *			timestamp_ge
+ *			timestamp_lt
+ *			timestamp_le
+ *
+ */
+
 #include "postgres.h"
 
 #include <ctype.h>
@@ -2206,12 +2219,14 @@ SetEpochTimestamp(void)
  *
  *		timestamp_relop - is timestamp1 relop timestamp2
  */
+//timestamp类型的比较函数，返回-1,0.1
 int
 timestamp_cmp_internal(Timestamp dt1, Timestamp dt2)
 {
 	return (dt1 < dt2) ? -1 : ((dt1 > dt2) ? 1 : 0);
 }
 
+//timestamp = timestamp 比较函数。
 Datum
 timestamp_eq(PG_FUNCTION_ARGS)
 {
@@ -2221,6 +2236,7 @@ timestamp_eq(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(timestamp_cmp_internal(dt1, dt2) == 0);
 }
 
+//timestamp ！= timestamp 比较函数。
 Datum
 timestamp_ne(PG_FUNCTION_ARGS)
 {
@@ -2230,6 +2246,7 @@ timestamp_ne(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(timestamp_cmp_internal(dt1, dt2) != 0);
 }
 
+//timestamp < timestamp 比较函数。
 Datum
 timestamp_lt(PG_FUNCTION_ARGS)
 {
@@ -2239,6 +2256,7 @@ timestamp_lt(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(timestamp_cmp_internal(dt1, dt2) < 0);
 }
 
+//timestamp > timestamp 比较函数。
 Datum
 timestamp_gt(PG_FUNCTION_ARGS)
 {
@@ -2248,6 +2266,7 @@ timestamp_gt(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(timestamp_cmp_internal(dt1, dt2) > 0);
 }
 
+//timestamp <= timestamp 比较函数。
 Datum
 timestamp_le(PG_FUNCTION_ARGS)
 {
@@ -2257,6 +2276,7 @@ timestamp_le(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(timestamp_cmp_internal(dt1, dt2) <= 0);
 }
 
+//timestamp => timestamp 比较函数。
 Datum
 timestamp_ge(PG_FUNCTION_ARGS)
 {

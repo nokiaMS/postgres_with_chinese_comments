@@ -20,10 +20,19 @@
 #include "fmgr.h"
 #include "pgtime.h"
 
+/*
+ * date类型定义。
+ */
 typedef int32 DateADT;
 
+/*
+ * time类型定义。
+ */
 typedef int64 TimeADT;
 
+/*
+ * timetz类型定义。
+ */
 typedef struct
 {
 	TimeADT		time;			/* all time units other than months and years */

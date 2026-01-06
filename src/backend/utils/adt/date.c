@@ -26,6 +26,8 @@
  *				out函数
  *				recv函数
  *				in函数
+ *				timetypmodin - typmod in函数
+ *				timetypmodout - typmod out函数
  *			timetz io函数：
 *				in函数
  *				out函数
@@ -39,6 +41,15 @@
  *				le - date <= date
  *				eq - date = date
  *				ne - date != date
+ *
+ *				跨类型比较函数：
+ *					date与timestamp比较：
+ *						date_eq_timestamp
+ *						date_ne_timestamp
+ *						date_le_timestamp
+ *						date_lt_timestamp
+ *						date_gt_timestamp
+ *						date_ge_timestamp
  *			time比较函数：
  *				ge - time >= time
  *				gt - time > time
@@ -86,6 +97,9 @@
  *			date_mii - date - x days
  *			date_pl_interval - date + interval支持函数
  *			date_mi_interval - date - interval支持函数
+ *			date_decrement - date自减。
+ *			date_increment - date自增。
+ *
  *			time_mi_time - time-time函数。
  *			time_pl_interval - time+interval函数。
  *			timetz_pl_interval - timetz+interval函数。
@@ -107,9 +121,33 @@
  *			timestamptz_timetz - timestamptz转timetz
  *			timetz_time
  *			time_timetz
+ *			datetimetz_timestamptz
  *		内部函数：
  *			time2tm - time转tm结构。
  *			tm2time - tm结构转time。
+ *			GetSQLCurrentDate - SQL CURRENT_DATE的内部实现函数。
+ *			GetSQLCurrentTime - SQL CURRENT_TIME和CURRENT_TIME(n)的内部实现函数。
+ *			GetSQLLocalTime - SQL LOCALTIME，LOCALTIME（n)的实现函数。
+ *			date_finite - isfinite(date)支持函数。
+ *			date2timestamp - date转timestamp支持函数。
+ *			date2timestamp_opt_overflow - date转timestamp支持函数。
+ *			make_date - SQL make_date支持函数。
+ *			date2timestamptz - date转timestamptz支持函数。
+ *			date2timestamptz_opt_overflow - date转timestamptz支持函数。
+ *			timetz_part - date_part支持函数。
+ *			extract_timetz - extract支持函数。
+ *			EncodeSpecialDate - 对特殊的date值进行编码并转换为字符串表示形式。
+ *			timetz_part_common - date_part支持函数使用的内部函数。
+ *			overlaps_timetz - overlaps操作符的支持函数。
+ *
+ *			anytime_typmodin - time类型与timetz类型的typmodin公用的函数。
+ *			anytime_typmod_check - time类型与timetz类型的typmodin公用的函数，带有typmod值的合法性的检测。
+ *			anytime_typmodout - time与timetz的typmodout公共支持函数。
+ *
+ *			timezone支持函数：
+ *				timetz_zone - timezone支持函数。
+ *				timetz_izone - 以interval为参数的timezone支持函数。
+ *				timetz_at_local - timezone支持函数。
  */
 
 #include "postgres.h"
@@ -146,6 +184,7 @@
 
 
 /* common code for timetypmodin and timetztypmodin */
+//time类型与timetz类型的typmodin公用的函数。
 static int32
 anytime_typmodin(bool istz, ArrayType *ta)
 {
@@ -167,6 +206,7 @@ anytime_typmodin(bool istz, ArrayType *ta)
 }
 
 /* exported so parse_expr.c can use it */
+//time类型与timetz类型的typmodin公用的函数，带有typmod值的合法性的检测。
 int32
 anytime_typmod_check(bool istz, int32 typmod)
 {
@@ -189,6 +229,7 @@ anytime_typmod_check(bool istz, int32 typmod)
 }
 
 /* common code for timetypmodout and timetztypmodout */
+//time与timetz的typmodout公共支持函数。
 static char *
 anytime_typmodout(bool istz, int32 typmod)
 {
@@ -341,6 +382,7 @@ date_send(PG_FUNCTION_ARGS)
 /*
  *		make_date			- date constructor
  */
+//SQL make_date支持函数。make_date ( year int, month int, day int )
 Datum
 make_date(PG_FUNCTION_ARGS)
 {
@@ -397,6 +439,7 @@ make_date(PG_FUNCTION_ARGS)
 /*
  * Convert reserved date values to string.
  */
+//对特殊的date值进行编码转换为字符串表示。
 void
 EncodeSpecialDate(DateADT dt, char *str)
 {
@@ -412,6 +455,7 @@ EncodeSpecialDate(DateADT dt, char *str)
 /*
  * GetSQLCurrentDate -- implements CURRENT_DATE
  */
+//SQL current_date函数的内部实现接口。
 DateADT
 GetSQLCurrentDate(void)
 {
@@ -445,6 +489,7 @@ GetSQLCurrentDate(void)
 /*
  * GetSQLCurrentTime -- implements CURRENT_TIME, CURRENT_TIME(n)
  */
+//SQL CURRENT_TIME, CURRENT_TIME(n)的内部实现。其中n为时区。
 TimeTzADT *
 GetSQLCurrentTime(int32 typmod)
 {
@@ -465,6 +510,7 @@ GetSQLCurrentTime(int32 typmod)
 /*
  * GetSQLLocalTime -- implements LOCALTIME, LOCALTIME(n)
  */
+// SQL LOCALTIME, LOCALETIME(n)的实现函数，n代表时区。
 TimeADT
 GetSQLLocalTime(int32 typmod)
 {
@@ -568,6 +614,9 @@ date_sortsupport(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+/*
+ * date自减（当前值减去1 day）。
+ */
 static Datum
 date_decrement(Relation rel, Datum existing, bool *underflow)
 {
@@ -584,6 +633,9 @@ date_decrement(Relation rel, Datum existing, bool *underflow)
 	return DateADTGetDatum(dexisting - 1);
 }
 
+/*
+ * date自增（当前值加上 1 day）。
+ */
 static Datum
 date_increment(Relation rel, Datum existing, bool *overflow)
 {
@@ -625,6 +677,7 @@ hashdateextended(PG_FUNCTION_ARGS)
 	return hash_uint32_extended(PG_GETARG_DATEADT(0), PG_GETARG_INT64(1));
 }
 
+//isfinite ( date )支持函数。
 Datum
 date_finite(PG_FUNCTION_ARGS)
 {
@@ -697,7 +750,7 @@ date_pli(PG_FUNCTION_ARGS)
 }
 
 /* Subtract a number of days from a date, giving a new date.
- * date + x天 支持函数。
+ * date - x天 支持函数。
  */
 Datum
 date_mii(PG_FUNCTION_ARGS)
@@ -735,6 +788,7 @@ date_mii(PG_FUNCTION_ARGS)
  * Note: *overflow = -1 is actually not possible currently, since both
  * datatypes have the same lower bound, Julian day zero.
  */
+// date转timestamp支持函数。
 Timestamp
 date2timestamp_opt_overflow(DateADT dateVal, int *overflow)
 {
@@ -778,6 +832,7 @@ date2timestamp_opt_overflow(DateADT dateVal, int *overflow)
 
 /*
  * Promote date to timestamp, throwing error for overflow.
+ * date转timestap支持函数。
  */
 static TimestampTz
 date2timestamp(DateADT dateVal)
@@ -795,6 +850,7 @@ date2timestamp(DateADT dateVal)
  * if overflow is not NULL, we store +1 or -1 there to indicate the sign
  * of the overflow, and return the appropriate timestamptz infinity.
  */
+//date转timestamptz支持函数。
 TimestampTz
 date2timestamptz_opt_overflow(DateADT dateVal, int *overflow)
 {
@@ -875,6 +931,7 @@ date2timestamptz_opt_overflow(DateADT dateVal, int *overflow)
 /*
  * Promote date to timestamptz, throwing error for overflow.
  */
+//date转timestamptz。
 static TimestampTz
 date2timestamptz(DateADT dateVal)
 {
@@ -913,13 +970,14 @@ date2timestamp_no_overflow(DateADT dateVal)
 /*
  * Crosstype comparison functions for dates
  */
-
+//date与timestamp比较。
 int32
 date_cmp_timestamp_internal(DateADT dateVal, Timestamp dt2)
 {
 	Timestamp	dt1;
 	int			overflow;
 
+	//date首先转换为timestamp.
 	dt1 = date2timestamp_opt_overflow(dateVal, &overflow);
 	if (overflow > 0)
 	{
@@ -928,9 +986,11 @@ date_cmp_timestamp_internal(DateADT dateVal, Timestamp dt2)
 	}
 	Assert(overflow == 0);		/* -1 case cannot occur */
 
+	//进行timestamp类型之间的比较。
 	return timestamp_cmp_internal(dt1, dt2);
 }
 
+//date = timestamp 比较函数。
 Datum
 date_eq_timestamp(PG_FUNCTION_ARGS)
 {
@@ -940,6 +1000,7 @@ date_eq_timestamp(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt2) == 0);
 }
 
+//date ！= timestamp 比较函数。
 Datum
 date_ne_timestamp(PG_FUNCTION_ARGS)
 {
@@ -949,6 +1010,7 @@ date_ne_timestamp(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt2) != 0);
 }
 
+//date < timestamp 比较函数。
 Datum
 date_lt_timestamp(PG_FUNCTION_ARGS)
 {
@@ -958,6 +1020,7 @@ date_lt_timestamp(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt2) < 0);
 }
 
+//date > timestamp 比较函数。
 Datum
 date_gt_timestamp(PG_FUNCTION_ARGS)
 {
@@ -967,6 +1030,7 @@ date_gt_timestamp(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt2) > 0);
 }
 
+//date <= timestamp 比较函数。
 Datum
 date_le_timestamp(PG_FUNCTION_ARGS)
 {
@@ -976,6 +1040,7 @@ date_le_timestamp(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt2) <= 0);
 }
 
+//date >= timestamp 比较函数。
 Datum
 date_ge_timestamp(PG_FUNCTION_ARGS)
 {
@@ -985,6 +1050,7 @@ date_ge_timestamp(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(date_cmp_timestamp_internal(dateVal, dt2) >= 0);
 }
 
+//date与timestamp比较。
 Datum
 date_cmp_timestamp(PG_FUNCTION_ARGS)
 {
@@ -1754,6 +1820,7 @@ time_send(PG_FUNCTION_ARGS)
 	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
 }
 
+//time类型的typmodin函数。
 Datum
 timetypmodin(PG_FUNCTION_ARGS)
 {
@@ -1762,6 +1829,7 @@ timetypmodin(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(anytime_typmodin(false, ta));
 }
 
+//time类型的typmodout函数。
 Datum
 timetypmodout(PG_FUNCTION_ARGS)
 {
@@ -2923,6 +2991,7 @@ in_range_timetz_interval(PG_FUNCTION_ARGS)
  * because the spec requires us to deliver a non-null answer in some cases
  * where some of the inputs are null.
  */
+//overlaps操作符的支持函数。
 Datum
 overlaps_timetz(PG_FUNCTION_ARGS)
 {
@@ -3115,6 +3184,7 @@ timestamptz_timetz(PG_FUNCTION_ARGS)
  * stored with the timetz to the result.
  * - thomas 2000-03-10
  */
+//datetimetz转timestamptz 转换函数。
 Datum
 datetimetz_timestamptz(PG_FUNCTION_ARGS)
 {
@@ -3156,6 +3226,7 @@ datetimetz_timestamptz(PG_FUNCTION_ARGS)
 /* timetz_part() and extract_timetz()
  * Extract specified field from time type.
  */
+//date_part支持函数使用的内部函数。
 static Datum
 timetz_part_common(PG_FUNCTION_ARGS, bool retnumeric)
 {
@@ -3272,13 +3343,18 @@ timetz_part_common(PG_FUNCTION_ARGS, bool retnumeric)
 		PG_RETURN_FLOAT8(intresult);
 }
 
-
+/*
+ * date_part 支持函数。
+ */
 Datum
 timetz_part(PG_FUNCTION_ARGS)
 {
 	return timetz_part_common(fcinfo, false);
 }
 
+/*
+ * extract 支持函数。
+ */
 Datum
 extract_timetz(PG_FUNCTION_ARGS)
 {
@@ -3289,6 +3365,7 @@ extract_timetz(PG_FUNCTION_ARGS)
  * Encode time with time zone type with specified time zone.
  * Applies DST rules as of the transaction start time.
  */
+//SQL timezone支持函数。
 Datum
 timetz_zone(PG_FUNCTION_ARGS)
 {
@@ -3351,6 +3428,7 @@ timetz_zone(PG_FUNCTION_ARGS)
 /* timetz_izone()
  * Encode time with time zone type with specified time interval as time zone.
  */
+//以interval为参数的timezone支持函数。
 Datum
 timetz_izone(PG_FUNCTION_ARGS)
 {
@@ -3394,6 +3472,7 @@ timetz_izone(PG_FUNCTION_ARGS)
  * Unlike for timestamp[tz]_at_local, the type for timetz does not flip between
  * time with/without time zone, so we cannot just call the conversion function.
  */
+//SQL timezone支持函数。
 Datum
 timetz_at_local(PG_FUNCTION_ARGS)
 {
