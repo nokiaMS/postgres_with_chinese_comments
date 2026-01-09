@@ -23,7 +23,7 @@
 #define PqMsg_FunctionCall			'F'
 #define PqMsg_Flush					'H'
 #define PqMsg_Parse					'P'
-#define PqMsg_Query					'Q'
+#define PqMsg_Query					'Q'     //简单消息查询命令。
 #define PqMsg_Sync					'S'
 #define PqMsg_Terminate				'X'
 #define PqMsg_CopyFail				'f'

@@ -4562,6 +4562,7 @@ build_generation_expression(Relation rel, int attrno)
  * NOTE: the parsetree must either have come straight from the parser,
  * or have been scanned by AcquireRewriteLocks to acquire suitable locks.
  */
+//查询重写。
 List *
 QueryRewrite(Query *parsetree)
 {

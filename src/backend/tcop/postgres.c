@@ -661,6 +661,9 @@ pg_parse_query(const char *query_string)
  *
  * NOTE: for reasons mentioned above, this must be separate from raw parsing.
  */
+/*
+ * 把通过此法分析生成的parsetree进行查询重写，优化并返回逻辑执行计划。
+ */
 List *
 pg_analyze_and_rewrite_fixedparams(RawStmt *parsetree,
 								   const char *query_string,
@@ -679,6 +682,7 @@ pg_analyze_and_rewrite_fixedparams(RawStmt *parsetree,
 	if (log_parser_stats)
 		ResetUsage();
 
+	//执行词法分析与语法分析，形成原始的逻辑执行计划。
 	query = parse_analyze_fixedparams(parsetree, query_string, paramTypes, numParams,
 									  queryEnv);
 
@@ -688,6 +692,7 @@ pg_analyze_and_rewrite_fixedparams(RawStmt *parsetree,
 	/*
 	 * (2) Rewrite the queries, as necessary
 	 */
+	//把原始逻辑计划进行重写生成最后的逻辑计划。
 	querytree_list = pg_rewrite_query(query);
 
 	TRACE_POSTGRESQL_QUERY_REWRITE_DONE(query_string);
@@ -806,6 +811,7 @@ pg_rewrite_query(Query *query)
 	if (log_parser_stats)
 		ResetUsage();
 
+	//不对工具类命令进行查询重写。
 	if (query->commandType == CMD_UTILITY)
 	{
 		/* don't rewrite utilities, just dump 'em into result list */
@@ -814,6 +820,7 @@ pg_rewrite_query(Query *query)
 	else
 	{
 		/* rewrite regular queries */
+		//执行查询重写。
 		querytree_list = QueryRewrite(query);
 	}
 
@@ -1007,6 +1014,7 @@ pg_plan_queries(List *querytrees, const char *query_string, int cursorOptions,
  *
  * Execute a "simple Query" protocol message.
  */
+//简单消息处理函数。
 static void
 exec_simple_query(const char *query_string)
 {
@@ -1061,6 +1069,7 @@ exec_simple_query(const char *query_string)
 	 * Do basic parsing of the query or queries (this should be safe even if
 	 * we are in aborted transaction state!)
 	 */
+	//把sql字符串翻译成parsetree。
 	parsetree_list = pg_parse_query(query_string);
 
 	/* Log immediately if dictated by log_statement */
@@ -1091,6 +1100,7 @@ exec_simple_query(const char *query_string)
 	/*
 	 * Run through the raw parsetree(s) and process each one.
 	 */
+	//用户发来的sql命令可能存在多个以分号分隔的命令，此处循环处理sql中每个以逗号分隔的sql命令。
 	foreach(parsetree_item, parsetree_list)
 	{
 		RawStmt    *parsetree = lfirst_node(RawStmt, parsetree_item);
@@ -1186,9 +1196,11 @@ exec_simple_query(const char *query_string)
 		else
 			oldcontext = MemoryContextSwitchTo(MessageContext);
 
+		//进行词法语法分析及查询重写，生成逻辑执行计划(querytree)。
 		querytree_list = pg_analyze_and_rewrite_fixedparams(parsetree, query_string,
 															NULL, 0, NULL);
 
+		//调用优化器进行执行计划优化，从逻辑执行计划(querytree)生成物理执行计划(plantree)。
 		plantree_list = pg_plan_queries(querytree_list, query_string,
 										CURSOR_OPT_PARALLEL_OK, NULL);
 
@@ -4695,6 +4707,7 @@ PostgresMain(const char *dbname, const char *username)
 		/*
 		 * (3) read a command (loop blocks here)
 		 */
+		//读取一个命令并返回此命令的消息类型(首字母)。
 		firstchar = ReadCommand(&input_message);
 
 		/*
@@ -4745,8 +4758,10 @@ PostgresMain(const char *dbname, const char *username)
 		if (ignore_till_sync && firstchar != EOF)
 			continue;
 
+		//根据mysql协议的首字母判断消息类型。
 		switch (firstchar)
 		{
+			//简单消息查询命令。
 			case PqMsg_Query:
 				{
 					const char *query_string;
@@ -4754,6 +4769,7 @@ PostgresMain(const char *dbname, const char *username)
 					/* Set statement_timestamp() */
 					SetCurrentStatementStartTimestamp();
 
+					//获得命令字符串。
 					query_string = pq_getmsgstring(&input_message);
 					pq_getmsgend(&input_message);
 
@@ -4763,6 +4779,7 @@ PostgresMain(const char *dbname, const char *username)
 							exec_simple_query(query_string);
 					}
 					else
+						//命令处理。
 						exec_simple_query(query_string);
 
 					valgrind_report_error_query(query_string);
