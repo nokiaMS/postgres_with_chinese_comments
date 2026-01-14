@@ -2951,7 +2951,7 @@ expression_tree_mutator_impl(Node *node,
 	 * The mutator has already decided not to modify the current node, but we
 	 * must call the mutator for any sub-nodes.
 	 */
-
+/* 给newnode申请一块新内存，并拷贝node内容到newnode中。 */
 #define FLATCOPY(newnode, node, nodetype)  \
 	( (newnode) = (nodetype *) palloc(sizeof(nodetype)), \
 	  memcpy((newnode), (node), sizeof(nodetype)) )
@@ -2982,7 +2982,7 @@ expression_tree_mutator_impl(Node *node,
 				return (Node *) newnode;
 			}
 			break;
-		case T_Const:
+		case T_Const:	//处理const节点，返回一个新的const对象，内容是旧const的拷贝。
 			{
 				Const	   *oldnode = (Const *) node;
 				Const	   *newnode;

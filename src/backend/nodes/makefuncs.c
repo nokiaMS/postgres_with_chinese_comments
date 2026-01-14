@@ -13,6 +13,7 @@
  *
  *-------------------------------------------------------------------------
  */
+//此文件中定义了各种节点的创建函数。
 #include "postgres.h"
 
 #include "catalog/pg_class.h"
@@ -346,6 +347,7 @@ makeFromExpr(List *fromlist, Node *quals)
  * makeConst -
  *	  creates a Const node
  */
+//构建一个常量节点。
 Const *
 makeConst(Oid consttype,
 		  int32 consttypmod,
@@ -404,6 +406,7 @@ makeNullConst(Oid consttype, int32 consttypmod, Oid constcollid)
  * makeBoolConst -
  *	  creates a Const node representing a boolean value (can be NULL too)
  */
+//构建一个bool常量。
 Node *
 makeBoolConst(bool value, bool isnull)
 {

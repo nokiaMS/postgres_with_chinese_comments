@@ -892,6 +892,7 @@ pg_plan_query(Query *querytree, const char *query_string, int cursorOptions,
 	PlannedStmt *plan;
 
 	/* Utility commands have no plans. */
+	//工具性命令不需要直行计划。
 	if (querytree->commandType == CMD_UTILITY)
 		return NULL;
 

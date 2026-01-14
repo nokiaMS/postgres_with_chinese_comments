@@ -320,6 +320,9 @@ typedef struct Var
  *
  * Only the constant type OID is relevant for the query jumbling.
  */
+/*
+ * 一个Const结构体。
+ */
 typedef struct Const
 {
 	pg_node_attr(custom_copy_equal, custom_read_write)
@@ -945,18 +948,24 @@ typedef struct ScalarArrayOpExpr
  * must always have exactly one element.  For AND and OR, there can be two
  * or more arguments.
  */
+//布尔表达式的类型。
 typedef enum BoolExprType
 {
 	AND_EXPR, OR_EXPR, NOT_EXPR
 } BoolExprType;
 
+//布尔表达式结构体。
 typedef struct BoolExpr
 {
 	pg_node_attr(custom_read_write)
 
+	/* 表达式通用的header，每个表达式都有此字段，而且需要放在结构体最前面。 */
 	Expr		xpr;
+	/* 布尔表达式类型。 */
 	BoolExprType boolop;
+	/* 参数列表，not只有一个参数，and和or有两个参数。 */
 	List	   *args;			/* arguments to this expression */
+	/* token位置。 */
 	ParseLoc	location;		/* token location, or -1 if unknown */
 } BoolExpr;
 

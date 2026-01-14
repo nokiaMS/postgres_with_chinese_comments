@@ -26,6 +26,7 @@
  *		typedef struct FormData_pg_statistic
  * ----------------
  */
+//pg_statistic结构定义。
 CATALOG(pg_statistic,2619,StatisticRelationId)
 {
 	/* These fields form the unique key for the entry: */
@@ -187,6 +188,7 @@ DECLARE_FOREIGN_KEY((starelid, staattnum), pg_attribute, (attrelid, attnum));
  * in MCV unless they have been observed to occur more than once; a unique
  * column will have no MCV slot.
  */
+//高频值。
 #define STATISTIC_KIND_MCV	1
 
 /*
@@ -207,6 +209,7 @@ DECLARE_FOREIGN_KEY((starelid, staattnum), pg_attribute, (attrelid, attnum));
  * the MCV list describes the entire data population; in this case the
  * histogram reduces to empty and should be omitted.
  */
+//直方图。
 #define STATISTIC_KIND_HISTOGRAM  2
 
 /*
@@ -219,6 +222,7 @@ DECLARE_FOREIGN_KEY((starelid, staattnum), pg_attribute, (attrelid, attnum));
  * values and the sequence of their actual tuple positions.  The coefficient
  * ranges from +1 to -1.
  */
+//相关性。
 #define STATISTIC_KIND_CORRELATION	3
 
 /*
@@ -244,6 +248,7 @@ DECLARE_FOREIGN_KEY((starelid, staattnum), pg_attribute, (attrelid, attnum));
  * type text, even though their representation within tsvector is not
  * exactly text.
  */
+//高频元素，通常用于数组类型中。
 #define STATISTIC_KIND_MCELEM  4
 
 /*
@@ -258,6 +263,7 @@ DECLARE_FOREIGN_KEY((starelid, staattnum), pg_attribute, (attrelid, attnum));
  * distinct-elements counts into M-1 bins of approximately equal population.
  * The first of these is the minimum observed count, and the last the maximum.
  */
+//元素计数直方图。
 #define STATISTIC_KIND_DECHIST	5
 
 /*
@@ -270,6 +276,7 @@ DECLARE_FOREIGN_KEY((starelid, staattnum), pg_attribute, (attrelid, attnum));
  * range type's subdiff function. Only non-null, non-empty rows are
  * considered.
  */
+//范围长度直方图，仅支持pg内置的范围类型。
 #define STATISTIC_KIND_RANGE_LENGTH_HISTOGRAM  6
 
 /*
@@ -281,6 +288,7 @@ DECLARE_FOREIGN_KEY((starelid, staattnum), pg_attribute, (attrelid, attnum));
  * histogram of lower bounds, and the upper bounds a histogram of upper
  * bounds.  Only non-NULL, non-empty ranges are included.
  */
+//范围边界直方图，仅支持pg的内置范围类型。
 #define STATISTIC_KIND_BOUNDS_HISTOGRAM  7
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */

@@ -2254,6 +2254,39 @@ rowtype_field_matches(Oid rowtypeid, int fieldnum,
  * converted to positional notation.  The executor won't handle either.
  *--------------------
  */
+
+/*--------------------
+ * eval_const_expressions 函数
+ *
+ * 化简给定表达式树中所有可识别的常量子表达式，例如将 “2 + 2” 转换为 “4”。
+ * 更值得注意的是，即便布尔表达式包含非常量子表达式，我们也可对其进行化简：
+ * 无论子表达式 x 的取值如何，“x OR true” 恒等于 “true”。
+ * （待办：目前我们假定这类子表达式不会产生重要的副作用，但在存在用户自定义函数的场景下，
+ * 这一假定未必成立。是否需要在 pg_proc 系统表中新增一个标记位，用于禁止跳过函数的执行逻辑？）
+ *
+ * 我们明确部分函数的特性：即便传入常量参数，其返回值仍可能是非常量的，nextval() 就是典型示例。
+ * 对于 pg_proc 中未标记为 **immutable（不可变）** 的函数，本函数不会对其进行预求值，
+ * 但会尽可能化简这些函数的入参表达式。
+ *
+ * 当某个函数通过常量表达式求值或内联优化被从表达式中移除时，
+ * 该函数会被添加至 root->glob->invalItems 列表中。
+ * 此举可确保执行计划被标记为依赖这些函数——即便后续执行计划不再直接引用它们。
+ *
+ * 函数执行的前置条件：输入的表达式树必须已完成类型检查，
+ * 且仅包含合法的运算符与函数（即具备可执行性的算子）。
+ *
+ * 注意事项 1：若调用方无需执行参数替换，也不需要获取内联函数的相关信息，可将 root 参数传入 NULL。
+ *
+ * 注意事项 2：查询优化器（planner）假定本函数会将嵌套的 AND/OR 子句展开为 N 元参数形式。
+ * 具体逻辑可参考 prepqual.c 文件中的注释说明。
+ *
+ * 注意事项 3：本函数的另一关键作用是：
+ * 对所有需要填充默认参数的函数调用进行参数补全，
+ * 并将**命名参数调用**转换为**位置参数调用**。
+ * 这是因为执行器（executor）不支持上述两种语法形式。
+ *--------------------
+ */
+//常量表达式化简。
 Node *
 eval_const_expressions(PlannerInfo *root, Node *node)
 {
@@ -2440,6 +2473,7 @@ estimate_expression_value(PlannerInfo *root, Node *node)
 /*
  * Recursive guts of eval_const_expressions/estimate_expression_value
  */
+//进行常量表达式优化。
 static Node *
 eval_const_expressions_mutator(Node *node,
 							   eval_const_expressions_context *context)
@@ -2834,12 +2868,16 @@ eval_const_expressions_mutator(Node *node,
 			}
 		case T_BoolExpr:
 			{
+				//对bool表达式进行优化。
+				//获得布尔表达式对象。
 				BoolExpr   *expr = (BoolExpr *) node;
 
+				//根据布尔操作类型分别处理。
 				switch (expr->boolop)
 				{
 					case OR_EXPR:
 						{
+							//处理or操作。
 							List	   *newargs;
 							bool		haveNull = false;
 							bool		forceTrue = false;
@@ -2868,6 +2906,7 @@ eval_const_expressions_mutator(Node *node,
 						}
 					case AND_EXPR:
 						{
+							//处理and操作。
 							List	   *newargs;
 							bool		haveNull = false;
 							bool		forceFalse = false;
@@ -2876,7 +2915,10 @@ eval_const_expressions_mutator(Node *node,
 															 context,
 															 &haveNull,
 															 &forceFalse);
+
+							//如果通过and表达式的参数计算，发现此and表达式可以强制设置为false了，那么直接返回一个false常量即可。
 							if (forceFalse)
+								//构建并返回一个false常量。
 								return makeBoolConst(false, false);
 							if (haveNull)
 								newargs = lappend(newargs,
@@ -2896,6 +2938,7 @@ eval_const_expressions_mutator(Node *node,
 						}
 					case NOT_EXPR:
 						{
+							//处理not操作。
 							Node	   *arg;
 
 							Assert(list_length(expr->args) == 1);
@@ -3880,16 +3923,16 @@ simplify_or_arguments(List *args,
 }
 
 /*
- * Subroutine for eval_const_expressions: process arguments of an AND clause
+ * Subroutine for eval_const_expressions: process arguments of an AND clause     此函数用于处理and表达式参数。
  *
- * This includes flattening of nested ANDs as well as recursion to
+ * This includes flattening of nested ANDs as well as recursion to               展开嵌套的and，同时递归处理and的参数。
  * eval_const_expressions to simplify the AND arguments.
  *
- * After simplification, AND arguments are handled as follows:
- *		non constant: keep
- *		TRUE: drop (does not affect result)
- *		FALSE: force result to FALSE
- *		NULL: keep only one
+ * After simplification, AND arguments are handled as follows:		化简之后，and参数情况如下：
+ *		non constant: keep												1. 非常量，保留；
+ *		TRUE: drop (does not affect result)								2. true：去掉(因为如果是true的化则后续的操作和它就没关系了。)
+ *		FALSE: force result to FALSE									3. 如果是false，那么就可以直接的出最终的and表达式结果为false了。
+ *		NULL: keep only one												4. 对于一系列and表达式，如果有多个null，那么只保留一个就可以了，去掉其他的null表达式。
  * We must keep one NULL input because AND expressions evaluate to NULL when
  * no input is FALSE and at least one is NULL.  We don't actually include the
  * NULL here, that's supposed to be done by the caller.
@@ -3897,7 +3940,7 @@ simplify_or_arguments(List *args,
  * The output arguments *haveNull and *forceFalse must be initialized false
  * by the caller.  They will be set true if a null constant or false constant,
  * respectively, is detected anywhere in the argument list.
- */
+ */  //化简and表达式的参数。
 static List *
 simplify_and_arguments(List *args,
 					   eval_const_expressions_context *context,
@@ -3907,15 +3950,15 @@ simplify_and_arguments(List *args,
 	List	   *unprocessed_args;
 
 	/* See comments in simplify_or_arguments */
-	unprocessed_args = list_copy(args);
-	while (unprocessed_args)
+	unprocessed_args = list_copy(args);		//获得未处理的参数列表。
+	while (unprocessed_args)	//依次处理参数。
 	{
-		Node	   *arg = (Node *) linitial(unprocessed_args);
+		Node	   *arg = (Node *) linitial(unprocessed_args);	//获得一个参数。
 
 		unprocessed_args = list_delete_first(unprocessed_args);
 
 		/* flatten nested ANDs as per above comment */
-		if (is_andclause(arg))
+		if (is_andclause(arg))	//展平and参数，即：如果and参数也是一个and字句，那么就或者这个and子句的参数放到当前的and参数列表中。
 		{
 			List	   *subargs = ((BoolExpr *) arg)->args;
 			List	   *oldlist = unprocessed_args;
@@ -3926,7 +3969,7 @@ simplify_and_arguments(List *args,
 			continue;
 		}
 
-		/* If it's not an AND, simplify it */
+		/* If it's not an AND, simplify it */	//递归对参数列表中的表达式进行处理。
 		arg = eval_const_expressions_mutator(arg, context);
 
 		/*
@@ -3947,7 +3990,7 @@ simplify_and_arguments(List *args,
 		 * OK, we have a const-simplified non-AND argument.  Process it per
 		 * comments above.
 		 */
-		if (IsA(arg, Const))
+		if (IsA(arg, Const))	//处理and操作符的常量参数。
 		{
 			Const	   *const_input = (Const *) arg;
 
@@ -3955,6 +3998,10 @@ simplify_and_arguments(List *args,
 				*haveNull = true;
 			else if (!DatumGetBool(const_input->constvalue))
 			{
+				/*
+				 * 获得常量参数的值，and操作符的参数肯定为bool类型，因此此处直接把常量值转换为bool类型，如果参数为false，那么
+				 * 设置forceFalse标记为true，表明此时and表达式的结果可以直接为fasle了。
+				 */
 				*forceFalse = true;
 
 				/*
