@@ -1669,6 +1669,7 @@ get_commutator(Oid opno)
  *
  *		Returns the corresponding negator of an operator.
  */
+//获得一个操作符的反向操作符。
 Oid
 get_negator(Oid opno)
 {

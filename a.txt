@@ -1,0 +1,44 @@
+./configure --prefix=`pwd`/release --with-zlib --enable-integer-datetimes --enable-debug CFLAGS=-O0
+make -j 40
+
+sed -i 's/world,doc/world,/' GNUmakefile
+sed -i 's/install-world,doc/install-world,/' GNUmakefile
+
+make install-world
+
+
+./initdb -D ../data -U SYSTEM
+./postgres -D ../data/ -p 12345
+./psql -p 12345 -U SYSTEM postgres
+
+======libpqxx
+./configure PG_CONFIG=/home/guoxu/code/pg121/postgresql-12.1/release/bin/pg_config
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/guoxu/code/pg121/postgresql-12.1/release/lib
+make
+sudo make install
+
+export PGPORT=44234
+echo $PGPORT
+export PGHOST=127.0.0.1
+echo $PGHOST
+make check
+export PGUSER=SYSTEM
+make check
+export PGDATABASE=postgres
+make check
+
+需要启动postgres服务make check才能成功。
+
+======测试文件编译
+g++ ./test_libpgxx.cpp -lpqxx -lpq -L/home/guoxu/code/pg121/postgresql-12.1/release/lib
+
+
+=====leveldb
+mkdir -p build && cd build
+cmake -DMAKE_BUILD_TYPE=Release .. && cmake --build .
+cmake -DMAKE_BUILD_TYPE=Debug .. && cmake --build .
+
+====leveldb demo
+g++ -g -o levelDemo levelDemo.cpp ../../leveldb/build/libleveldb.a -lpthread -I../../leveldb/include/
+
+

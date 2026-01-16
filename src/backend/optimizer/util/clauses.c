@@ -16,6 +16,10 @@
  *
  *-------------------------------------------------------------------------
  */
+/*
+ * 函数列表：
+ *	static List * simplify_and_arguments(List *args, eval_const_expressions_context *context, bool *haveNull, bool *forceFalse)  ---- 化简and表达式参数。
+ */
 
 #include "postgres.h"
 
@@ -2819,6 +2823,14 @@ eval_const_expressions_mutator(Node *node,
 			}
 		case T_NullIfExpr:
 			{
+				/*
+				 * 专门处理 T_NullIfExpr 类型节点（对应 SQL 中的 NULLIF(expression1, expression2) 函数，
+				 * 功能是：当两个表达式值相等时返回 NULL，否则返回第一个表达式的值），
+				 * 核心逻辑是对 NullIfExpr 进行常量简化与安全求值，避免运行时不必要的计算开销。
+				 * 先明确核心背景
+				 *		NULLIF(a, b) 的逻辑等价于 CASE WHEN a = b THEN NULL ELSE a END，
+				 *		这段代码就是对这个表达式进行编译期 / 预处理阶段的优化，优先处理常量场景，减少运行时计算。
+				 */
 				NullIfExpr *expr;
 				ListCell   *arg;
 				bool		has_nonconst_input = false;
@@ -2827,11 +2839,11 @@ eval_const_expressions_mutator(Node *node,
 				expr = (NullIfExpr *) ece_generic_processing(node);
 
 				/* If either argument is NULL they can't be equal */
-				foreach(arg, expr->args)
+				foreach(arg, expr->args)	//获得if_null表达式的参数。
 				{
 					if (!IsA(lfirst(arg), Const))
 						has_nonconst_input = true;
-					else if (((Const *) lfirst(arg))->constisnull)
+					else if (((Const *) lfirst(arg))->constisnull)	//如果第一个参数为null，则返回第一个参数。
 						return (Node *) linitial(expr->args);
 				}
 
@@ -2841,14 +2853,24 @@ eval_const_expressions_mutator(Node *node,
 				 */
 				set_opfuncid((OpExpr *) expr);
 
+				//如果nullif的表达式参数全部为常量，那么直接直行表达式计算。
 				if (!has_nonconst_input &&
 					ece_function_is_safe(expr->opfuncid, context))
+					/*
+					 * 对符合安全条件的表达式（此处为 NullIfExpr）进行实际求值计算，返回计算后的常量结果节点，而非原表达式节点，
+					 * 本质是实现 “编译期 / 规划期求值”，替代 “运行时求值”，减少查询执行阶段的开销。
+					 */
 					return ece_evaluate_expr(expr);
 
 				return (Node *) expr;
 			}
 		case T_ScalarArrayOpExpr:
 			{
+				/*
+				 * （对应 SQL 中的标量 - 数组比较操作，例如 col = ANY(array[1,2,3])、col > ALL(array[4,5,6]) 等，
+				 * 核心是实现 “单个标量值与数组中的所有元素进行批量比较”），
+				 * 核心逻辑是对该类表达式进行常量简化与编译期求值优化，减少查询运行时的计算开销。
+				 */
 				ScalarArrayOpExpr *saop;
 
 				/* Copy the node and const-simplify its arguments */
@@ -2868,7 +2890,9 @@ eval_const_expressions_mutator(Node *node,
 			}
 		case T_BoolExpr:
 			{
-				//对bool表达式进行优化。
+				/*
+				 * bool表达式化简。
+				 */
 				//获得布尔表达式对象。
 				BoolExpr   *expr = (BoolExpr *) node;
 
@@ -2877,11 +2901,14 @@ eval_const_expressions_mutator(Node *node,
 				{
 					case OR_EXPR:
 						{
-							//处理or操作。
+							/*
+							 * 化简or表达式,与and表达式的处理逻辑大体一致。
+							 */
 							List	   *newargs;
 							bool		haveNull = false;
 							bool		forceTrue = false;
 
+							//对or表达式的参数进行化简。
 							newargs = simplify_or_arguments(expr->args,
 															context,
 															&haveNull,
@@ -2906,11 +2933,14 @@ eval_const_expressions_mutator(Node *node,
 						}
 					case AND_EXPR:
 						{
-							//处理and操作。
+							/*
+							 * 化简and表达式。
+							 */
 							List	   *newargs;
 							bool		haveNull = false;
 							bool		forceFalse = false;
 
+							//对and表达式参数进行化简。
 							newargs = simplify_and_arguments(expr->args,
 															 context,
 															 &haveNull,
@@ -2924,13 +2954,13 @@ eval_const_expressions_mutator(Node *node,
 								newargs = lappend(newargs,
 												  makeBoolConst(false, true));
 							/* If all the inputs are TRUE, result is TRUE */
-							if (newargs == NIL)
-								return makeBoolConst(true, false);
+							if (newargs == NIL)  //从simplify_and_arguments函数的处理过程中可见，对于and表达式的true常量参数不会添加到返回的参数列表中，因此如果返回的参数列表为nulL,则表示and表达式的参数全部为true。
+								return makeBoolConst(true, false);   //如果and表达式的参数全部为true，那么结果自然为true，直接返回一个true常量对象。
 
 							/*
 							 * If only one nonconst-or-NULL input, it's the
 							 * result
-							 */
+							 */ //如果and表达式优化后的参数只有一个，则表明此参数即结果，直接返回即可；否则需要用新参数重新构造一个优化后的and表达式。
 							if (list_length(newargs) == 1)
 								return (Node *) linitial(newargs);
 							/* Else we still need an AND node */
@@ -2938,17 +2968,20 @@ eval_const_expressions_mutator(Node *node,
 						}
 					case NOT_EXPR:
 						{
-							//处理not操作。
+							/*
+							 * 化简not表达式。
+							 */
 							Node	   *arg;
 
 							Assert(list_length(expr->args) == 1);
-							arg = eval_const_expressions_mutator(linitial(expr->args),
+							arg = eval_const_expressions_mutator(linitial(expr->args),    /* 首先递归对参数进行化简。 */
 																 context);
 
 							/*
 							 * Use negate_clause() to see if we can simplify
 							 * away the NOT.
 							 */
+							//此函数构造not子句，在构造的过程中会尝试对not表达式进行优化。
 							return negate_clause(arg);
 						}
 					default:
@@ -3593,6 +3626,10 @@ eval_const_expressions_mutator(Node *node,
 		case T_BooleanTest:
 			{
 				/*
+				 * 对 bool test表达式进行优化。
+				 */
+
+				/*
 				 * This case could be folded into the generic handling used
 				 * for ArrayExpr etc.  But because the simplification logic is
 				 * so trivial, applying evaluate_expr() to perform it would be
@@ -3797,6 +3834,24 @@ contain_non_const_walker(Node *node, void *context)
 /*
  * Subroutine for eval_const_expressions: check if a function is OK to evaluate
  */
+/*
+ * 函数 ece_function_is_safe 完整逻辑解析
+ *		这是 eval_const_expressions 函数的辅助子例程，核心职责是判断一个指定 OID 对应的数据库函数，是否可以在预处理阶段安全地进行常量求值，
+ *		避免因执行不安全函数导致副作用、结果不一致或查询优化错误。
+ *		一、先明确核心背景与前置概念
+			函数的 “易变性”（Volatility）：PostgreSQL 对函数定义了 3 种核心易变性等级（通过 func_volatile(funcid) 获取，对应函数元数据中的 provolatile 字段），这是判断函数是否可安全预处理的核心依据：
+			PROVOLATILE_IMMUTABLE（不可变函数）：输入相同则结果必然相同，且不依赖任何外部环境（如时间、数据库状态、配置等），无任何副作用。例如 abs()（取绝对值）、length()（字符串长度）。
+			PROVOLATILE_STABLE（稳定函数）：在单次查询执行期间结果保持稳定，但跨查询、跨规划阶段可能变化，依赖部分外部环境（如当前事务的时间、当前用户）。例如 current_date()、lower()（字符串转小写，依赖字符集配置但单次查询内稳定）。
+			PROVOLATILE_VOLATILE（易变函数）：即使输入相同，结果也可能随时变化，有潜在副作用。例如 random()（生成随机数）、nextval()（序列自增）、current_timestamp()（精确到微秒，随时变化）。
+		函数入参说明：
+			Oid funcid：函数的唯一标识 OID，用于查询函数的易变性等元数据。
+			eval_const_expressions_context *context：常量求值上下文，其中 context->estimate 是一个布尔标记，标识当前是否处于查询代价估算 / 规划评估场景。
+		返回值：
+			核心判断规则（优先级从高到低）：
+				不可变函数 → 始终安全（返回 true）；
+				估算场景下的稳定函数 → 安全（返回 true）；
+				其他所有情况 → 不安全（返回 false）。
+ */
 static bool
 ece_function_is_safe(Oid funcid, eval_const_expressions_context *context)
 {
@@ -3834,6 +3889,26 @@ ece_function_is_safe(Oid funcid, eval_const_expressions_context *context)
  * The output arguments *haveNull and *forceTrue must be initialized false
  * by the caller.  They will be set true if a NULL constant or TRUE constant,
  * respectively, is detected anywhere in the argument list.
+ */
+/*
+ * （这是）`eval_const_expressions` 函数的子例程：处理 OR 子句的参数
+ *
+ * 该子例程的功能包括两部分：一是对嵌套的 OR 结构进行扁平化处理，二是递归调用
+ * `eval_const_expressions` 函数，对 OR 子句的各个参数进行简化。
+ *
+ * 参数简化完成后，会按照以下规则处理 OR 子句的各个参数：
+ *      非常量参数：保留
+ *      FALSE（假）常量：丢弃（不会影响 OR 表达式的最终结果）
+ *      TRUE（真）常量：强制将整个 OR 表达式的结果设为 TRUE（真）
+ *      NULL（空值）常量：仅保留其中一个即可
+ *
+ * 我们必须保留至少一个 NULL 输入，原因是：当 OR 表达式的所有输入都不为 TRUE，
+ * 且至少有一个输入为 NULL 时，该 OR 表达式的求值结果为 NULL。需要注意的是，
+ * 我们并不会在此处实际将 NULL 包含到输出结果中，这项工作应由调用者来完成。
+ *
+ * 输出参数 *haveNull 和 *forceTrue 必须由调用者初始化为 false（假）。
+ * 当在参数列表中检测到任意 NULL 常量时，*haveNull 会被设为 true（真）；
+ * 当检测到任意 TRUE 常量时，*forceTrue 会被设为 true（真）。
  */
 static List *
 simplify_or_arguments(List *args,
@@ -3931,7 +4006,7 @@ simplify_or_arguments(List *args,
  * After simplification, AND arguments are handled as follows:		化简之后，and参数情况如下：
  *		non constant: keep												1. 非常量，保留；
  *		TRUE: drop (does not affect result)								2. true：去掉(因为如果是true的化则后续的操作和它就没关系了。)
- *		FALSE: force result to FALSE									3. 如果是false，那么就可以直接的出最终的and表达式结果为false了。
+ *		FALSE: force result to FALSE									3. 如果是false，那么就可以直接得出最终的and表达式结果为false了。
  *		NULL: keep only one												4. 对于一系列and表达式，如果有多个null，那么只保留一个就可以了，去掉其他的null表达式。
  * We must keep one NULL input because AND expressions evaluate to NULL when
  * no input is FALSE and at least one is NULL.  We don't actually include the
@@ -3940,7 +4015,10 @@ simplify_or_arguments(List *args,
  * The output arguments *haveNull and *forceFalse must be initialized false
  * by the caller.  They will be set true if a null constant or false constant,
  * respectively, is detected anywhere in the argument list.
- */  //化简and表达式的参数。
+ */
+/*
+ * 化简and表达式的参数，返回化简之后的参数列表。
+ */
 static List *
 simplify_and_arguments(List *args,
 					   eval_const_expressions_context *context,
@@ -3958,7 +4036,9 @@ simplify_and_arguments(List *args,
 		unprocessed_args = list_delete_first(unprocessed_args);
 
 		/* flatten nested ANDs as per above comment */
-		if (is_andclause(arg))	//展平and参数，即：如果and参数也是一个and字句，那么就或者这个and子句的参数放到当前的and参数列表中。
+		//展平and参数，即：如果and参数也是一个and字句，那么就或者这个and子句的参数放到当前的and参数列表中。
+		//此处对于and子句参数，只优化一层就可以了，因为下面还会调用 eval_const_expressions_mutator函数，这个函数会继续迭代。
+		if (is_andclause(arg))
 		{
 			List	   *subargs = ((BoolExpr *) arg)->args;
 			List	   *oldlist = unprocessed_args;
@@ -3994,6 +4074,10 @@ simplify_and_arguments(List *args,
 		{
 			Const	   *const_input = (Const *) arg;
 
+			/*
+			 * 对于null参数，设置出参haveNull。
+			 * 对于false常量，直接设置forceFalse出参，函数直接返回，因为不需要其他判断了，整个and表达式肯定为false。
+			 */
 			if (const_input->constisnull)
 				*haveNull = true;
 			else if (!DatumGetBool(const_input->constvalue))
@@ -4016,6 +4100,7 @@ simplify_and_arguments(List *args,
 		}
 
 		/* else emit the simplified arg into the result list */
+		//对于不能再化简的参数，添加到返回列表中。
 		newargs = lappend(newargs, arg);
 	}
 

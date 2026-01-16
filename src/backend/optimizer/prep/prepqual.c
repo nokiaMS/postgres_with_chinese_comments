@@ -28,6 +28,30 @@
  *
  *-------------------------------------------------------------------------
  */
+/*-------------------------------------------------------------------------
+ *
+ * prepqual.c
+ *    限定表达式预处理相关的函数实现文件
+ *
+ * 虽然语法解析器会将简单的、连续的 AND/OR 子句序列，解析为扁平化的（支持 N 个参数的）AND/OR 表达式树；
+ * 但如果输入的 SQL 语句使用了不规范的括号分组，或者在规则展开、子查询扁平化的过程中，都可能产生特殊的表达式结构——
+ * 即一个 AND 子句直接嵌套在另一个 AND 子句之下，或一个 OR 子句直接嵌套在另一个 OR 子句之下。
+ * 为了保证查询优化行为的一致性，查询优化器需要将这类嵌套结构全部扁平化。
+ *
+ * 该模块在早期版本中负责执行初始的扁平化操作，不过现在我们将这项工作交由 `eval_const_expressions` 函数完成；
+ * 原因是该函数本身就需要对整个表达式树进行完整遍历，顺带处理扁平化可以避免重复遍历，提升效率。
+ * 目前该模块的核心职责，是确保在对表达式进行局部转换操作后，依然能够维持 AND/OR 表达式树的扁平化特性。
+ * 其中 `pull_ands()` 和 `pull_ors()` 两个函数的作用是：当局部转换操作引入新的嵌套 AND/OR 结构时，对其进行扁平化处理，以维持结构一致性。
+ *
+ * 版权声明部分
+ * 本文件相关代码的版权归 PostgreSQL 全球开发组所有（1996-2025）
+ * 部分代码的版权归加州大学董事会所有（1994）
+ *
+ * 源码标识
+ *    该文件在 PostgreSQL 源码树中的路径为：src/backend/optimizer/prep/prepqual.c
+ *
+ *-------------------------------------------------------------------------
+ */
 
 #include "postgres.h"
 
@@ -69,6 +93,47 @@ static Expr *process_duplicate_ors(List *orlist);
  * expressions will be seen as physically equal(), so we should always apply
  * the same transformations.
  */
+/*
+ * negate_clause
+ *    对一个布尔表达式进行取反操作。
+ *
+ * 输入参数是需要被取反的子句（例如，NOT 子句的参数）。
+ * 返回一个新的子句，该子句与输入子句的取反结果在逻辑上等价。
+ *
+ * 虽然该函数可以独立调用，但它的主要用途是作为 `eval_const_expressions()` 函数的辅助函数，
+ * 并且这一使用场景决定了它的多项设计决策。具体来说：如果输入子句已经是扁平化的 AND/OR 结构，
+ * 那么我们必须保留这一结构特性。此外，在某些场景下我们无需进行递归处理——因为可以假定，
+ * `eval_const_expressions()` 函数在底层执行时，已经对输入子句的子节点进行了简化处理。
+ *
+ * 该函数与简单调用 `make_notclause()` 函数的区别在于：它会尝试通过逻辑简化操作消除 NOT 节点。
+ * 显然，如果能够彻底移除 NOT 节点，这无论如何都是更优的选择。不过，我们运用德·摩根定律进行转换时，
+ * 有可能导致 NOT 节点的数量不减少反而增加。即便如此，我们依然会无条件地执行这一转换，原因如下：
+ * 1. 在 WHERE 子句中，尽可能暴露顶层的 AND/OR 结构是至关重要的；
+ * 2. 移除中间层的 NOT 节点，可能让我们能够将原本无法合并的两层 AND 或 OR 结构进行扁平化合并；
+ * 3. 执行此项操作的核心动机之一，是确保逻辑等价的表达式在物理层面能够被 `equal()` 函数判定为相等，
+ *    因此我们应当始终应用一致的转换规则。
+ */
+/*
+ * 对一个输入表达式取反。
+ *		1. 对null取反仍然为null。
+ *		2. 对于操作符，使用其反向操作符进行优化，即 NOT op => op->oprnegate
+ *		3. 对于bool表达式:
+ *			(NOT (AND A B)) => (OR (NOT A) (NOT B))
+ *			(NOT (OR A B))	=> (AND (NOT A) (NOT B))
+ *			NOT(NOT A) => A
+ *			对于前两条规则，是为了把not下推到地层表达式中，以便于继续优化。
+*		4. 对 is_null进行优化：
+			如果原始为is_null，那么优化为is_not_null；
+			如果原始为is_not_null，那么优化为is_null;
+		5. 对bool test表达式进行优化：
+			is_true => is_not_true,
+			is_not_true => is true,
+			is_false => is_not_false,
+			is_not_false => is false,
+			is_known => is_not_known,
+			is_not_known => is_known;
+		6. 对标量数组操作，也是取数组的反向操作符进行优化。
+ */
 Node *
 negate_clause(Node *node)
 {
@@ -78,6 +143,9 @@ negate_clause(Node *node)
 	{
 		case T_Const:
 			{
+				/*
+				 *	处理常量。
+				 */
 				Const	   *c = (Const *) node;
 
 				/* NOT NULL is still NULL */
@@ -90,11 +158,16 @@ negate_clause(Node *node)
 		case T_OpExpr:
 			{
 				/*
+				 * 处理操作符表达式。(NOT (< A B)) => (>= A B)
+				 */
+
+				/*
 				 * Negate operator if possible: (NOT (< A B)) => (>= A B)
 				 */
 				OpExpr	   *opexpr = (OpExpr *) node;
-				Oid			negator = get_negator(opexpr->opno);
+				Oid			negator = get_negator(opexpr->opno);	//获得一个操作符的反向操作符。
 
+				//用反向操作符构造一个新的节点。
 				if (negator)
 				{
 					OpExpr	   *newopexpr = makeNode(OpExpr);
@@ -113,6 +186,10 @@ negate_clause(Node *node)
 			break;
 		case T_ScalarArrayOpExpr:
 			{
+				/*
+				 * 对标量数组操作，也是取数组的反向操作符进行优化。
+				 */
+
 				/*
 				 * Negate a ScalarArrayOpExpr if its operator has a negator;
 				 * for example x = ANY (list) becomes x <> ALL (list)
@@ -138,6 +215,9 @@ negate_clause(Node *node)
 			break;
 		case T_BoolExpr:
 			{
+				/*
+				 * 优化bool表达式。
+				 */
 				BoolExpr   *expr = (BoolExpr *) node;
 
 				switch (expr->boolop)
@@ -159,6 +239,7 @@ negate_clause(Node *node)
 						 */
 					case AND_EXPR:
 						{
+							//优化规则：(NOT (AND A B)) => (OR (NOT A) (NOT B))
 							List	   *nargs = NIL;
 							ListCell   *lc;
 
@@ -172,6 +253,7 @@ negate_clause(Node *node)
 						break;
 					case OR_EXPR:
 						{
+							//优化规则：(NOT (OR A B))	=> (AND (NOT A) (NOT B))
 							List	   *nargs = NIL;
 							ListCell   *lc;
 
@@ -184,7 +266,7 @@ negate_clause(Node *node)
 						}
 						break;
 					case NOT_EXPR:
-
+						//优化规则： NOT(NOT A)  => A
 						/*
 						 * NOT underneath NOT: they cancel.  We assume the
 						 * input is already simplified, so no need to recurse.
@@ -199,6 +281,11 @@ negate_clause(Node *node)
 			break;
 		case T_NullTest:
 			{
+				/*
+				 * 对 is_null进行优化：
+				 *		如果原始为is_null，那么优化为is_not_null；
+				 *		如果原始为is_not_null，那么优化为is_null;
+				 */
 				NullTest   *expr = (NullTest *) node;
 
 				/*
@@ -221,6 +308,9 @@ negate_clause(Node *node)
 			break;
 		case T_BooleanTest:
 			{
+				/*
+				 * 优化bool test表达式。
+				 */
 				BooleanTest *expr = (BooleanTest *) node;
 				BooleanTest *newexpr = makeNode(BooleanTest);
 
@@ -263,6 +353,7 @@ negate_clause(Node *node)
 	 * Otherwise we don't know how to simplify this, so just tack on an
 	 * explicit NOT node.
 	 */
+	//其他不能够或者不需要优化的情况，直接返回一个not字句，即 NOT(原节点)。
 	return (Node *) make_notclause((Expr *) node);
 }
 

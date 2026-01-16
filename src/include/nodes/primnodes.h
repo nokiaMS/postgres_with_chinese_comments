@@ -322,6 +322,7 @@ typedef struct Var
  */
 /*
  * 一个Const结构体。
+ * 一个const对象必须是非扩展形式的，这样就保证了const对象是自包含的。
  */
 typedef struct Const
 {
