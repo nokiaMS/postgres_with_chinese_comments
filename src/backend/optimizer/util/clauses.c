@@ -2630,6 +2630,13 @@ eval_const_expressions_mutator(Node *node,
 				 * length coercion; we want to preserve the typmod in the
 				 * eventual Const if so.
 				 */
+				/**
+				 * 由于代码量比较大，因此此处对函数化简的逻辑抽取出了一个单独的函数进行处理。
+				 * 注释中提到，exprTypmod 通常会返回 -1，表示 FuncExpr 节点的类型修饰符（typmod）。
+				 * 但在某些情况下，例如当节点被识别为长度强制转换时，需要保留类型修饰符，以确保最终生成的常量（Const）
+				 * 节点能够正确反映原始表达式的类型信息。通过将化简逻辑拆分为独立函数，代码不仅提高了可读性，还便于对操作符或函数的化简逻辑进行
+				 * 单独维护和扩展。这种设计方式在复杂的表达式化简场景中尤为重要。
+				 */
 				simple = simplify_function(expr->funcid,
 										   expr->funcresulttype,
 										   exprTypmod(node),
@@ -2640,6 +2647,7 @@ eval_const_expressions_mutator(Node *node,
 										   true,
 										   true,
 										   context);
+				//如果化简成功，则直接返回化简后的节点。
 				if (simple)		/* successfully simplified it */
 					return (Node *) simple;
 
@@ -2649,6 +2657,7 @@ eval_const_expressions_mutator(Node *node,
 				 * possibly-simplified arguments.  Note that we have also
 				 * converted the argument list to positional notation.
 				 */
+				//否则，构建一个新的 FuncExpr 节点，使用可能已化简的参数列表。(返回节点的参数列表可能已经是被化简过了的。)
 				newexpr = makeNode(FuncExpr);
 				newexpr->funcid = expr->funcid;
 				newexpr->funcresulttype = expr->funcresulttype;
@@ -4193,6 +4202,32 @@ simplify_boolean_equality(Oid opno, List *args)
  * will be done even if simplification of the function call itself is not
  * possible.
  */
+/**
+ * 尝试简化函数调用（该函数调用可能最初是一个操作符，我们并不关心这一点）
+ *
+ * 输入参数包括函数的 OID、实际结果类型的 OID（对于多态函数来说是必需的）、结果类型修饰符、结果排序规则、
+ * 用于函数的输入排序规则、原始参数列表（除非 process_args 为 false，否则尚未进行常量简化）以及一些标志；
+ * 还包括 eval_const_expressions 的上下文数据。
+ *
+ * 如果成功简化函数调用，则返回简化后的表达式；如果无法简化，则返回 NULL。
+ *
+ * 此函数还负责将命名表示法参数列表转换为位置表示法，和/或添加任何所需的默认参数表达式；
+ * 虽然这有点麻烦，但它避免了对函数的 pg_proc 元组进行额外的获取。出于这个原因，args 列表是通过引用传递的。
+ * 即使无法简化函数调用本身，也会对参数列表进行转换和常量简化。
+ */
+/**
+	各个参数的说明：
+		Oid funcid：函数的唯一标识 OID，用于查询函数的元数据。
+		Oid result_type：函数调用的预期结果类型的 OID，特别是对于多态函数来说，这个参数是必需的。
+		int32 result_typmod：结果类型修饰符，指定结果类型的特定变体或限制。
+		Oid result_collid：结果排序规则的 OID，指定结果值的排序和比较规则。
+		Oid input_collid：输入排序规则的 OID，用于函数参数的排序和比较。
+		List **args_p：指向参数列表的指针，参数列表可能尚未进行常量简化，除非 process_args 为 false。
+		bool funcvariadic：指示函数是否为可变参数函数（variadic function）。
+		bool process_args：指示是否需要对参数列表进行处理（转换为位置表示法并进行常量简化）。true 表示需要处理，false 表示参数列表已经被处理过。
+		bool allow_non_const：指示是否允许返回非常量表达式作为简化结果。
+		eval_const_expressions_context *context：常量求值的上下文信息。
+ */
 static Expr *
 simplify_function(Oid funcid, Oid result_type, int32 result_typmod,
 				  Oid result_collid, Oid input_collid, List **args_p,
@@ -4216,6 +4251,17 @@ simplify_function(Oid funcid, Oid result_type, int32 result_typmod,
 	 * strategies; so if !allow_non_const, simplify_function can only return a
 	 * Const or NULL.  Argument-list rewriting happens anyway, though.
 	 */
+	/**
+	 * 我们有三种简化策略：
+			1. 执行函数以提供常量结果、
+			2. 使用转换函数生成替代节点树，
+			3. 或展开函数定义的内联主体（这仅适用于简单的 SQL 语言函数，但这是一个常见的情况）。
+	 * 每种情况都需要访问函数的 pg_proc 元组，因此只需获取一次。
+	 *
+	 * 注意：allow_non_const 标志同时抑制第二和第三种策略；因此如果 !allow_non_const，则 simplify_function 只能返回 Const 或 NULL。
+	 * 不过，参数列表重写无论如何都会发生。
+	 */
+	//从系统缓存中获取函数的pg_proc元组。第一个参数是缓存的标识符，第二个参数是函数的oid。
 	func_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(func_tuple))
 		elog(ERROR, "cache lookup failed for function %u", funcid);
@@ -4226,6 +4272,10 @@ simplify_function(Oid funcid, Oid result_type, int32 result_typmod,
 	 *
 	 * Here we must deal with named or defaulted arguments, and then
 	 * recursively apply eval_const_expressions to the whole argument list.
+	 */
+	/**
+	 * 处理函数参数。process_args参数指示调用者是否要求要进行参数处理。true表示需要处理，false表示调用者已经处理过，此处不需要处理了。
+	 * 在这里，我们必须处理命名或默认参数，然后递归地将 eval_const_expressions 应用于整个参数列表。
 	 */
 	if (process_args)
 	{
@@ -4238,12 +4288,22 @@ simplify_function(Oid funcid, Oid result_type, int32 result_typmod,
 	}
 
 	/* Now attempt simplification of the function call proper. */
-
+	//首先尝试通过执行函数来简化函数调用，以获得常量结果。
+	//如果返回结果为NULL，表示无法通过执行函数来简化。如果不为null，则表示成功简化，返回简化后的表达式。
 	newexpr = evaluate_function(funcid, result_type, result_typmod,
 								result_collid, input_collid,
 								args, funcvariadic,
 								func_tuple, context);
 
+	/**
+	 * 如果 newexpr 为 null，表示无法通过执行函数来简化，那么需要采用另外两种策略来简化函数调用。
+	 * 首先检查是否允许使用转换函数来生成替代节点树,当allow_non_const为true的时候，能够返回非常量节点，则表示允许。
+	 * 如果允许，并且函数定义中存在支持函数（prosupport 字段有效），则构建一个 SupportRequestSimplify 节点，
+	 * 传递给支持函数，以便生成替代节点树。
+	 * 其中，pg_proc.prosupport 的作用是用于让函数的实现者或扩展提供一个钩子，供优化/规划阶段请求特殊处理
+	 *		（例如生成替代的表达式树、做自定义化简或转换），而不是直接执行该函数或只能返回常量。
+	 */
+	//尝试使用支持函数进行化简，这个支持函数作为一个hook点有可能是第三方或者用户自定义的。
 	if (!newexpr && allow_non_const && OidIsValid(func_form->prosupport))
 	{
 		/*
@@ -4252,6 +4312,12 @@ simplify_function(Oid funcid, Oid result_type, int32 result_typmod,
 		 * simplified arg list.  We use this approach to present a uniform
 		 * interface to the support function regardless of how the target
 		 * function is actually being invoked.
+		 */
+		/**
+		 * 构建一个 SupportRequestSimplify 节点，传递给支持函数，
+		 * 指向一个包含简化参数列表的虚拟 FuncExpr 节点。
+		 * 我们使用这种方法来向支持函数呈现一个统一的接口，
+		 * 无论目标函数实际上是如何被调用的。
 		 */
 		SupportRequestSimplify req;
 		FuncExpr	fexpr;
@@ -4271,6 +4337,7 @@ simplify_function(Oid funcid, Oid result_type, int32 result_typmod,
 		req.root = context->root;
 		req.fcall = &fexpr;
 
+		//把构建好的支持函数参数发送给函数对应的支持函数，并对支持函数进行调用，返回调用后的新的表达式节点。
 		newexpr = (Expr *)
 			DatumGetPointer(OidFunctionCall1(func_form->prosupport,
 											 PointerGetDatum(&req)));
@@ -4279,6 +4346,7 @@ simplify_function(Oid funcid, Oid result_type, int32 result_typmod,
 		Assert(newexpr != (Expr *) &fexpr);
 	}
 
+	//最后尝试内联函数定义的主体来简化函数调用。
 	if (!newexpr && allow_non_const)
 		newexpr = inline_function(funcid, result_type, result_collid,
 								  input_collid, args, funcvariadic,
@@ -4559,6 +4627,14 @@ recheck_cast_function_args(List *args, Oid result_type,
  * Returns a simplified expression if successful, or NULL if cannot
  * simplify the function.
  */
+/**
+ * 尝试预先计算函数调用
+ *
+ * 如果函数是严格的并且具有任何常量 null 输入（只返回一个 null 常量），或者如果函数是不可变的并且具有所有常量输入（调用它并将结果作为 Const 节点返回），
+ * 我们就可以这样做。在估算模式下，我们也愿意预先计算稳定的函数。
+ *
+ * 如果成功简化函数，则返回简化后的表达式；如果无法简化函数，则返回 NULL。
+ */
 static Expr *
 evaluate_function(Oid funcid, Oid result_type, int32 result_typmod,
 				  Oid result_collid, Oid input_collid, List *args,
@@ -4575,6 +4651,7 @@ evaluate_function(Oid funcid, Oid result_type, int32 result_typmod,
 	/*
 	 * Can't simplify if it returns a set.
 	 */
+	//对于返回集合的函数，无法进行简化处理。
 	if (funcform->proretset)
 		return NULL;
 
@@ -4588,12 +4665,14 @@ evaluate_function(Oid funcid, Oid result_type, int32 result_typmod,
 	 * null constant with no remaining indication of which concrete record
 	 * type it is.  For now, seems best to leave the function call unreduced.
 	 */
+	//对于返回RECORD类型的函数，无法进行简化处理。
 	if (funcform->prorettype == RECORDOID)
 		return NULL;
 
 	/*
 	 * Check for constant inputs and especially constant-NULL inputs.
 	 */
+	//检测每一个函数入参，潘达un是否有null输入和非常量输入。
 	foreach(arg, args)
 	{
 		if (IsA(lfirst(arg), Const))
@@ -4608,6 +4687,8 @@ evaluate_function(Oid funcid, Oid result_type, int32 result_typmod,
 	 * if there are other inputs that aren't constant, and even if the
 	 * function is not otherwise immutable.
 	 */
+	//对于严格函数来说，如果有一个常量null输入，那么函数调用将永远不会被执行，会立即返回null。
+	//因此此处直接构建一个null const节点返回即可。
 	if (funcform->proisstrict && has_null_input)
 		return (Expr *) makeNullConst(result_type, result_typmod,
 									  result_collid);
@@ -4617,6 +4698,7 @@ evaluate_function(Oid funcid, Oid result_type, int32 result_typmod,
 	 * non-strict function, constant NULL inputs are treated the same as
 	 * constant non-NULL inputs.)
 	 */
+	//如果参数列表中存在非常量，则无法进行简化处理，直接返回null。
 	if (has_nonconst_input)
 		return NULL;
 
@@ -4627,6 +4709,7 @@ evaluate_function(Oid funcid, Oid result_type, int32 result_typmod,
 	 * time to execution time is worth taking in preference to not being able
 	 * to estimate the value at all.
 	 */
+	//对于VOLATILE函数无法进行优化。
 	if (funcform->provolatile == PROVOLATILE_IMMUTABLE)
 		 /* okay */ ;
 	else if (context->estimate && funcform->provolatile == PROVOLATILE_STABLE)
@@ -4650,6 +4733,7 @@ evaluate_function(Oid funcid, Oid result_type, int32 result_typmod,
 	newexpr->args = args;
 	newexpr->location = -1;
 
+	//到了此处，能够保证能够执行并返回一个const节点了，因此可以执行表达式，并将结果作为Const节点返回。
 	return evaluate_expr((Expr *) newexpr, result_type, result_typmod,
 						 result_collid);
 }
@@ -4685,6 +4769,25 @@ evaluate_function(Oid funcid, Oid result_type, int32 result_typmod,
  * Returns a simplified expression if successful, or NULL if cannot
  * simplify the function.
  */
+/** 内联函数：尝试内联展开函数调用
+ *
+ * 如果函数是一个足够简单的 SQL 语言函数（仅仅是 "SELECT expression"），那么我们可以将其内联展开，
+ * 避免 SQL 函数的每次调用开销相当高。此外，这还可以揭示函数表达式中进行常量折叠的机会。
+ *
+ * 然而，我们必须注意一些特殊情况。直接或间接递归的函数会导致我们无限递归，
+ * 因此我们跟踪已经在展开的函数，并且不重新展开它们。
+ * 此外，如果参数在 SQL 函数体中被使用多次，我们要求它不包含任何易变函数（易变函数可能会提供不一致的答案），
+ * 也不能评估得过于昂贵。昂贵性检查不仅防止我们在运行时多次评估昂贵的参数，
+ * 而且还是一个安全值，用于限制由于重复内联而导致的表达式增长。
+ *
+ * 我们还必须注意不要通过内联改变函数的易变性或严格性状态。
+ *
+ * 此外，目前我们无法内联返回 RECORD 的函数。这在一般情况下不起作用，因为它会丢弃诸如 OUT 参数声明之类的信息。
+ *
+ * 此外，参数列表中的上下文相关表达式节点也是麻烦。
+ *
+ * 如果成功简化函数，则返回简化后的表达式；如果无法简化，则返回 NULL。
+ */
 static Expr *
 inline_function(Oid funcid, Oid result_type, Oid result_collid,
 				Oid input_collid, List *args,
@@ -4716,6 +4819,7 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 	 * Forget it if the function is not SQL-language or has other showstopper
 	 * properties.  (The prokind and nargs checks are just paranoia.)
 	 */
+	//如果函数不是 SQL 语言，或者具有其他阻止内联的属性，则放弃内联。（prokind 和 nargs 检查只是出于谨慎考虑。）
 	if (funcform->prolang != SQLlanguageId ||
 		funcform->prokind != PROKIND_FUNCTION ||
 		funcform->prosecdef ||

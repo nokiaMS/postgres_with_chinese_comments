@@ -61,11 +61,28 @@ struct WindowClause;
  * modify *fcall, as it isn't really a separately allocated Node.  But
  * it's okay to use fcall->args, or parts of it, in the result tree.
  */
+/**
+ * 此结构体用于表示对函数调用进行简化的请求。
+ * 它允许支持函数在计划阶段对目标函数调用进行简化。其主要目的是通过优化函数调用来提高查询性能。
+ * 首先，Simplify request 的作用是在查询规划器的常量折叠阶段执行。
+ * 例如，对于一个 varchar 类型的长度转换，如果转换不会减少参数的允许长度，可以将其替换为一个 RelabelType 节点；
+ * 或者将表达式 "x + 0" 简化为 "x"。这表明支持函数可以在计划阶段对函数调用进行语义等价的简化。
+ * 注释中提到，PlannerInfo 类型的 root 字段通常不需要使用，但在某些情况下可以用来获取节点树中变量的信息。
+ * 然而，需要注意的是，在某些用例中，root 可能为 NULL。
+ * fcall 是一个 FuncExpr 类型的指针，表示对目标函数的调用。即使原始解析树节点是一个操作符调用，也会为此目的合成一个 FuncExpr。
+ * 支持函数可以通过访问 fcall 的参数（如 fcall->args）来生成简化后的节点树。
+ * 最后，支持函数的返回值应该是一个语义等价的转换后节点树。如果无法进行简化，则返回 NULL。
+ * 需要特别注意的是，支持函数不能直接返回或修改 fcall，因为它并不是一个单独分配的节点，但可以在结果树中使用 fcall->args 或其部分内容。
+ */
 typedef struct SupportRequestSimplify
 {
+	/* 节点类型标识符。*/
 	NodeTag		type;
 
+	/* 执行简化操作时所需的规划器信息。*/
 	struct PlannerInfo *root;	/* Planner's infrastructure */
+
+	/* 待化简的函数调用表达式。*/
 	FuncExpr   *fcall;			/* Function call to be simplified */
 } SupportRequestSimplify;
 
