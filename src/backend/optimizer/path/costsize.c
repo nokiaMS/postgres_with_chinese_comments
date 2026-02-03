@@ -291,19 +291,48 @@ clamp_cardinality_to_long(Cardinality x)
  * 'baserel' is the relation to be scanned
  * 'param_info' is the ParamPathInfo if this is a parameterized path, else NULL
  */
+
+/*
+ * cost_seqscan - 计算顺序扫描（SeqScan）执行路径的成本
+ *
+ * 该函数是 PostgreSQL 查询优化器的核心函数之一，用于估算对基础表进行顺序扫描的
+ * 启动成本、运行成本和总成本，为查询路径选择提供成本依据。
+ *
+ * 参数说明：
+ *   path:        待计算成本的路径节点（SeqScan 路径）
+ *   root:        包含查询优化相关信息的顶层结构体
+ *   baserel:     待扫描的基础关系（表）的信息结构体
+ *   param_info:  路径相关的参数信息（如参数化路径的行估计值），可为 NULL
+ */
 void
 cost_seqscan(Path *path, PlannerInfo *root,
 			 RelOptInfo *baserel, ParamPathInfo *param_info)
 {
+	/* 启动成本：执行到开始返回数据前的成本（如条件过滤的初始化成本） */
 	Cost		startup_cost = 0;
+
+	/* CPU 运行成本：扫描过程中处理数据的 CPU 开销 */
 	Cost		cpu_run_cost;
+
+	/* 磁盘运行成本：扫描过程中读取数据的磁盘 IO 开销 */
 	Cost		disk_run_cost;
+
+	/* 表空间的顺序扫描每页成本：不同表空间的 IO 成本可能不同
+	 * spc意义为 space page cost.
+	 */
 	double		spc_seq_page_cost;
+
+	/* 过滤条件（qpqual）的成本：包含启动成本和每元组处理成本 */
 	QualCost	qpqual_cost;
+
+	/* 处理每条元组的 CPU 基础成本 */
 	Cost		cpu_per_tuple;
 
 	/* Should only be applied to base relations */
+	/* 断言：确保当前处理的是基础关系（物理表），而非子查询/连接等虚拟关系 */
+	/* relid > 0 表示是基础表（系统表/用户表），而非临时的虚拟关系 */
 	Assert(baserel->relid > 0);
+	/* rtekind 标记关系类型，RTE_RELATION 表示是普通表/分区表等物理关系 */
 	Assert(baserel->rtekind == RTE_RELATION);
 
 	/* Mark the path with the correct row estimate */

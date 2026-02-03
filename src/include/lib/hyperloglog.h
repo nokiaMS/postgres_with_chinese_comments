@@ -11,6 +11,10 @@
  * src/include/lib/hyperloglog.h
  */
 
+/**
+ * 此文件是一个简单的 HyperLogLog 基数估计算法的实现。
+ */
+
 /*
  * Copyright (c) 2013 Hideaki Ohno <hide.o.j55{at}gmail.com>
  *
@@ -50,19 +54,60 @@
  *		hashesArr			array of hashes
  *		arrSize				size of hashesArr
  */
+/**
+ * HyperLogLog 是一种用于计算集合中不同条目数量的近似数量的技术。
+ * 重要的是，它使用固定量的内存来实现这一点。
+ * 参见 2007 年的论文 "HyperLogLog: the analysis of a near-optimal cardinality estimation algorithm"。
+ */
 typedef struct hyperLogLogState
 {
 	uint8		registerWidth;
 	Size		nRegisters;
 	double		alphaMM;
+
+	/**
+	 * 哈希值数组。
+	 */
 	uint8	   *hashesArr;
+
+	/**
+	 * 数组大小。
+	 */
 	Size		arrSize;
 } hyperLogLogState;
 
+/**
+ * 初始化 HyperLogLog 结构体
+ * @param cState
+ * @param bwidth
+ */
 extern void initHyperLogLog(hyperLogLogState *cState, uint8 bwidth);
+
+/**
+ * 初始化 HyperLogLog 结构体，指定误差率
+ * @param cState
+ * @param error
+ */
 extern void initHyperLogLogError(hyperLogLogState *cState, double error);
+
+/**
+ * 向 HyperLogLog 结构体添加哈希值
+ * @param cState
+ * @param hash
+ */
 extern void addHyperLogLog(hyperLogLogState *cState, uint32 hash);
+
+/**
+ * 估计 HyperLogLog 结构体中的基数
+ * @param cState
+ * @return
+ */
 extern double estimateHyperLogLog(hyperLogLogState *cState);
+
+/**
+ * 释放 HyperLogLog 结构体的内存
+ * @param cState
+ */
 extern void freeHyperLogLog(hyperLogLogState *cState);
 
 #endif							/* HYPERLOGLOG_H */

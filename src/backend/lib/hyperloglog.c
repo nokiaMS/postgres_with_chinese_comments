@@ -62,11 +62,17 @@ static inline uint8 rho(uint32 x, uint8 b);
  * bwidth is bit width (so register size will be 2 to the power of bwidth).
  * Must be between 4 and 16 inclusive.
  */
+/**
+ * 初始化 HyperLogLog结构体，按位宽
+ * @param cState HyperLogLog 状态结构体指针
+ * @param bwidth 位宽（因此寄存器大小将是 2 的 bwidth 次方）。必须在 4 到 16 之间（含）。
+ */
 void
 initHyperLogLog(hyperLogLogState *cState, uint8 bwidth)
 {
 	double		alpha;
 
+	//位宽必须在4到16之间。
 	if (bwidth < 4 || bwidth > 16)
 		elog(ERROR, "bit width must be between 4 and 16 inclusive");
 
@@ -77,6 +83,9 @@ initHyperLogLog(hyperLogLogState *cState, uint8 bwidth)
 	/*
 	 * Initialize hashes array to zero, not negative infinity, per discussion
 	 * of the coupon collector problem in the HyperLogLog paper
+	 */
+	/**
+	 * 将哈希数组初始化为零，而不是负无穷大，
 	 */
 	cState->hashesArr = palloc0(cState->arrSize);
 
@@ -124,6 +133,18 @@ initHyperLogLog(hyperLogLogState *cState, uint8 bwidth)
  * As bwidth has to be between 4 and 16, the worst possible error rate
  * is between ~25% (bwidth=4) and 0.4% (bwidth=16).
  */
+/**
+ * 初始化 HyperLogLog 结构体，按误差率
+ * 没有指定 bwidth（用于寻址寄存器的位数），此方法允许使用论文中的简单公式为特定误差率调整计数器大小
+ * e = 1.04 / sqrt(m)
+ * 其中 'm' 是寄存器的数量，即 (2^bwidth)。
+ * 这个方法找到最低的 bwidth，使 'e' 低于请求的误差率，然后使用它来初始化计数器。
+ *
+ * 因为bwidth必须在4到16之间，所以最坏的可能误差率在~25%（bwidth=4）和0.4%（bwidth=16）之间。
+ *
+ * @param cState hll状态结构体指针
+ * @param error 误差率
+ */
 void
 initHyperLogLogError(hyperLogLogState *cState, double error)
 {
@@ -147,6 +168,10 @@ initHyperLogLogError(hyperLogLogState *cState, double error)
  * Releases allocated resources, but not the state itself (in case it's not
  * allocated by palloc).
  */
+/**
+ * 此函数作用是释放 HyperLogLog 状态结构体中分配的资源，但不释放结构体本身（以防它不是通过 palloc 分配的）。
+ * @param cState 参数作用是 HyperLogLog 状态结构体指针
+ */
 void
 freeHyperLogLog(hyperLogLogState *cState)
 {
@@ -163,6 +188,16 @@ freeHyperLogLog(hyperLogLogState *cState)
  * uniform distribution of bits in hash values for each distinct original value
  * observed.
  */
+/**
+ * 此函数作用是将元素添加到估算器中，使用调用者提供的哈希值。
+ *
+ * 关键的是传递的哈希值必须是实际的哈希值，通常使用 hash_any() 生成。
+ * 算法依赖于与随机平均相结合可观察到的特定位模式。
+ * 因此，必须为每个不同的原始值观察到哈希值中的位均匀分布。
+ *
+ * @param cState
+ * @param hash
+ */
 void
 addHyperLogLog(hyperLogLogState *cState, uint32 hash)
 {
@@ -173,6 +208,7 @@ addHyperLogLog(hyperLogLogState *cState, uint32 hash)
 	index = hash >> (BITS_PER_BYTE * sizeof(uint32) - cState->registerWidth);
 
 	/* Compute the rank of the remaining 32 - "k" (registerWidth) bits */
+	//计算剩余的 32 - "k"（registerWidth）位的秩
 	count = rho(hash << cState->registerWidth,
 				BITS_PER_BYTE * sizeof(uint32) - cState->registerWidth);
 
@@ -181,6 +217,11 @@ addHyperLogLog(hyperLogLogState *cState, uint32 hash)
 
 /*
  * Estimates cardinality, based on elements added so far
+ */
+/**
+ * 此函数是基于到目前为止添加的元素来估计基数。
+ * @param cState
+ * @return 返回估计的基数
  */
 double
 estimateHyperLogLog(hyperLogLogState *cState)
@@ -237,6 +278,9 @@ estimateHyperLogLog(hyperLogLogState *cState)
  * "The binary address determined by the first b bits of x"
  *
  * Return value "j" used to index bit pattern to watch.
+ */
+/**
+ * 此函数用于 addHyperLogLog() 函数。
  */
 static inline uint8
 rho(uint32 x, uint8 b)
