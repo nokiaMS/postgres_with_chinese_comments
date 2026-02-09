@@ -231,6 +231,11 @@ static double btcost_correlation(IndexOptInfo *index,
  * such as "~=" (geometric approximate-match).  Even for "=", we must
  * keep in mind that the left and right datatypes may differ.
  */
+/**
+ * 此函数估计任何数据类型的“=”的选择性。
+ * @param fcinfo 函数调用信息
+ * @return 选择性，即返回一个0到1之间的浮点数，表示满足条件的行占总行数的比例
+ */
 Datum
 eqsel(PG_FUNCTION_ARGS)
 {
@@ -239,6 +244,12 @@ eqsel(PG_FUNCTION_ARGS)
 
 /*
  * Common code for eqsel() and neqsel()
+ */
+/**
+ * 此函数是eqsel()和neqsel()的公共代码，用于估计任何数据类型的“=”或“<>”的选择性。
+ * @param fcinfo 函数调用信息
+ * @param negate 一个布尔值，指示是否要估计“<>”的选择性。如果negate为true，则估计“<>”的选择性；如果negate为false，则估计“=”的选择性。
+ * @return 选择性，即返回一个0到1之间的浮点数，表示满足条件的行占总行数的比例
  */
 static double
 eqsel_internal(PG_FUNCTION_ARGS, bool negate)
@@ -257,19 +268,25 @@ eqsel_internal(PG_FUNCTION_ARGS, bool negate)
 	 * When asked about <>, we do the estimation using the corresponding =
 	 * operator, then convert to <> via "1.0 - eq_selectivity - nullfrac".
 	 */
+	/**
+	 * 当被要求估计“<>”的选择性时，我们使用对应的“=”运算符进行估计，然后通过“1.0 - eq_selectivity - nullfrac”转换为“<>”的选择性。
+	 */
 	if (negate)
 	{
-		operator = get_negator(operator);
+		operator = get_negator(operator);	//获得与给定operator相对应的否定运算符的OID。
 		if (!OidIsValid(operator))
 		{
 			/* Use default selectivity (should we raise an error instead?) */
-			return 1.0 - DEFAULT_EQ_SEL;
+			return 1.0 - DEFAULT_EQ_SEL;	//返回默认选择性的补数，即1.0减去默认选择性。
 		}
 	}
 
 	/*
 	 * If expression is not variable = something or something = variable, then
 	 * punt and return a default estimate.
+	 */
+	/**
+	 * 如果表达式不是变量=某物或某物=变量，那么就放弃并返回一个默认估计值。
 	 */
 	if (!get_restriction_variable(root, args, varRelid,
 								  &vardata, &other, &varonleft))
@@ -280,7 +297,11 @@ eqsel_internal(PG_FUNCTION_ARGS, bool negate)
 	 * Const might result from estimation rather than being a simple constant
 	 * in the query.)
 	 */
+	/**
+	 * 如果某物是一个常量，我们可以做得更好。（注意：Const可能是估计的结果，而不是查询中的简单常量。）
+	 */
 	if (IsA(other, Const))
+		//处理 a = 常量 或 常量 = a 的情况，调用 var_eq_const 函数进行选择性估计。
 		selec = var_eq_const(&vardata, operator, collation,
 							 ((Const *) other)->constvalue,
 							 ((Const *) other)->constisnull,
@@ -299,6 +320,17 @@ eqsel_internal(PG_FUNCTION_ARGS, bool negate)
  *
  * This is exported so that some other estimation functions can use it.
  */
+/**
+ * 此函数用于估计变量与常量之间的等式条件的选择性，例如 var = const 或 const = var 的情况。
+ * @param vardata 变量的统计数据，包含了关于变量所在列的统计信息，例如最常见值、直方图等。
+ * @param oproid
+ * @param collation
+ * @param constval
+ * @param constisnull
+ * @param varonleft
+ * @param negate
+ * @return
+ */
 double
 var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 			 Datum constval, bool constisnull,
@@ -313,6 +345,9 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 	 * If the constant is NULL, assume operator is strict and return zero, ie,
 	 * operator will never return TRUE.  (It's zero even for a negator op.)
 	 */
+	/**
+	 *如果常量为NULL，假设运算符是严格的并返回零，即运算符永远不会返回TRUE。（即使对于否定运算符也是零。）
+	 */
 	if (constisnull)
 		return 0.0;
 
@@ -320,12 +355,18 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 	 * Grab the nullfrac for use below.  Note we allow use of nullfrac
 	 * regardless of security check.
 	 */
+	/**
+	 * 获取nullfrac以供下面使用。请注意，我们允许使用nullfrac，无论安全检查如何。
+	 * 所谓nullfrac，是指在统计信息中记录的该列的NULL值所占的比例。这个值可以帮助我们更准确地估计选择性，特别是在常量不为NULL的情况下。
+	 * 此值记录在pg_statistic表中，如果该列的统计信息可用，我们就可以使用它来调整选择性估计。
+	 */
 	if (HeapTupleIsValid(vardata->statsTuple))
 	{
+		//如果列的统计信息存在，那么我们就可以从统计信息中获取nullfrac值。统计信息是通过ANALYZE命令收集的，包含了关于列的数据分布、最常见值、直方图等信息。
 		Form_pg_statistic stats;
 
 		stats = (Form_pg_statistic) GETSTRUCT(vardata->statsTuple);
-		nullfrac = stats->stanullfrac;
+		nullfrac = stats->stanullfrac;	//从统计信息中获取nullfrac值
 	}
 
 	/*
@@ -335,14 +376,21 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 	 * be different from ours, but it's much more likely to be right than
 	 * ignoring the information.)
 	 */
+	/**
+	 *如果变量具有唯一索引、DISTINCT或GROUP-BY子句，假设无论其他因素如何，都只有一个匹配项。（这有点不准确，
+	 * 因为索引或子句的等式运算符可能与我们的不同，但它比忽略这些信息更有可能是正确的。）
+	 */
 	if (vardata->isunique && vardata->rel && vardata->rel->tuples >= 1.0)
 	{
+		//如果变量具有唯一索引，并且相关的关系存在且至少有一行，那么我们可以假设选择性为1.0除以关系中的行数。
+		//这是因为唯一索引保证了每个值只能出现一次，所以满足条件的行数最多为1行。
 		selec = 1.0 / vardata->rel->tuples;
 	}
 	else if (HeapTupleIsValid(vardata->statsTuple) &&
 			 statistic_proc_security_check(vardata,
 										   (opfuncoid = get_opcode(oproid))))
 	{
+		//如果统计信息可用，并且安全检查通过，那么我们可以使用统计信息来进行更准确的选择性估计。
 		AttStatsSlot sslot;
 		bool		match = false;
 		int			i;
@@ -354,10 +402,16 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 		 * don't like this, maybe you shouldn't be using eqsel for your
 		 * operator...)
 		 */
+		/**
+		 * 常量是否与列的任何最常见值相等？
+		 * （虽然给定的运算符可能不是真正的“=”，但我们将假设查看它是否返回TRUE是一个适当的测试。
+		 * 如果你不喜欢这个，可能你就不应该为你的运算符使用eqsel...）
+		 */
 		if (get_attstatsslot(&sslot, vardata->statsTuple,
 							 STATISTIC_KIND_MCV, InvalidOid,
 							 ATTSTATSSLOT_VALUES | ATTSTATSSLOT_NUMBERS))
 		{
+			//如果我们成功地获取了最常见值的统计信息，那么我们就可以检查常量是否与这些最常见值中的任何一个相等。
 			LOCAL_FCINFO(fcinfo, 2);
 			FmgrInfo	eqproc;
 
@@ -408,6 +462,9 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 			 * Constant is "=" to this common value.  We know selectivity
 			 * exactly (or as exactly as ANALYZE could calculate it, anyway).
 			 */
+			/**
+			 *判断常量是否与某个最常见值相等。如果相等，我们就知道选择性确切地等于该最常见值的频率（即sslot.numbers[i]）。
+			 */
 			selec = sslot.numbers[i];
 		}
 		else
@@ -417,11 +474,16 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 			 * of the common values.  Its selectivity cannot be more than
 			 * this:
 			 */
+			/**
+			 *如果常量没有在mcv中出现，那么走一下逻辑进行处理。
+			 */
 			double		sumcommon = 0.0;
 			double		otherdistinct;
 
+			//计算所有mcv值的频率之和，即sumcommon。这个值表示了所有最常见值的总频率。
 			for (i = 0; i < sslot.nnumbers; i++)
 				sumcommon += sslot.numbers[i];
+
 			selec = 1.0 - sumcommon - nullfrac;
 			CLAMP_PROBABILITY(selec);
 
@@ -452,16 +514,22 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 		 * of distinct values and assuming they are equally common. (The guess
 		 * is unlikely to be very good, but we do know a few special cases.)
 		 */
+		/**
+		 *如果统计信息不可用，我们就使用估计的不同值的数量来进行猜测，并假设它们是同样常见的。
+		 *（这个猜测不太可能非常准确，但我们确实知道一些特殊情况。）
+		 */
 		selec = 1.0 / get_variable_numdistinct(vardata, &isdefault);
 	}
 
 	/* now adjust if we wanted <> rather than = */
+	//通过=的选择率来计算<>的选择率。
 	if (negate)
 		selec = 1.0 - selec - nullfrac;
 
 	/* result should be in range, but make sure... */
 	CLAMP_PROBABILITY(selec);
 
+	//返回计算后的选择率。
 	return selec;
 }
 
@@ -5159,10 +5227,22 @@ convert_timevalue_to_scalar(Datum value, Oid typid, bool *failure)
  * Note: if there are Vars on both sides of the clause, we must fail, because
  * callers are expecting that the other side will act like a pseudoconstant.
  */
+/**
+ * 此函数检查一个限制条件的参数列表，看看它是否符合(variable op pseudoconstant)或(pseudoconstant op variable)的形式，
+ * 其中"variable"可以是一个Var或者一个包含单个关系的vars中的表达式。如果符合这种形式，就提取关于变量的信息，并指示它在哪一侧以及另一个参数是什么。
+ * 所谓variable op pseudoconstant的意思是：一个变量与一个伪常量进行比较，例如a = 5，其中a是变量，5是伪常量。又或者是5 = a，这时变量在右边。
+ * @param root 此参数是PlannerInfo类型的指针，包含了查询计划的相关信息。
+ * @param args 这是一个List类型的参数，包含了限制条件的参数列表。通常情况下，这个列表应该包含两个元素，分别代表限制条件的左右两侧。
+ * @param varRelid 这是一个整数参数，表示变量所属的关系ID。这个参数用于在检查变量时确定它是否属于特定的关系。
+ * @param vardata 这是一个VariableStatData类型的指针，用于存储关于变量的信息。这个结构体包含了变量的相关统计数据和属性。
+ * @param other 这是一个Node类型的指针，用于存储另一个参数的信息，即限制条件中与变量进行比较的那个参数。这个参数会被积极地简化为一个常量。
+ * @param varonleft 这是一个布尔类型的指针，用于指示变量是在限制条件的左侧还是右侧。如果变量在左侧，*varonleft将被设置为true；如果变量在右侧，*varonleft将被设置为false。
+ * @return 如果成功识别出一个变量，函数返回true；否则返回false。
+ */
 bool
 get_restriction_variable(PlannerInfo *root, List *args, int varRelid,
-						 VariableStatData *vardata, Node **other,
-						 bool *varonleft)
+                         VariableStatData *vardata, Node **other,
+                         bool *varonleft)
 {
 	Node	   *left,
 			   *right;
@@ -6254,6 +6334,12 @@ statistic_proc_security_check(VariableStatData *vardata, Oid func_oid)
  * NB: be careful to produce a positive integral result, since callers may
  * compare the result to exact integer counts, or might divide by it.
  */
+/**
+ * 此函数估计一个变量的不同值的数量。
+ * @param vardata
+ * @param isdefault
+ * @return
+ */
 double
 get_variable_numdistinct(VariableStatData *vardata, bool *isdefault)
 {
@@ -6271,12 +6357,15 @@ get_variable_numdistinct(VariableStatData *vardata, bool *isdefault)
 	 */
 	if (HeapTupleIsValid(vardata->statsTuple))
 	{
+		/**
+		 *如果我们有一个有效的pg_statistic条目，我们可以使用它来获取stadistinct和stanullfrac的值。
+		 */
 		/* Use the pg_statistic entry */
 		Form_pg_statistic stats;
 
 		stats = (Form_pg_statistic) GETSTRUCT(vardata->statsTuple);
-		stadistinct = stats->stadistinct;
-		stanullfrac = stats->stanullfrac;
+		stadistinct = stats->stadistinct; //stadistinct是pg_statistic表中的一个字段，表示不同值的数量的估计值。
+		stanullfrac = stats->stanullfrac; //stanullfrac是pg_statistic表中的一个字段，表示变量中null值的比例的估计值。
 	}
 	else if (vardata->vartype == BOOLOID)
 	{
@@ -6285,6 +6374,9 @@ get_variable_numdistinct(VariableStatData *vardata, bool *isdefault)
 		 *
 		 * Are there any other datatypes we should wire in special estimates
 		 * for?
+		 */
+		/**
+		 * 对于布尔类型的列，特殊处理：假设有两个不同的值。
 		 */
 		stadistinct = 2.0;
 	}
@@ -6296,6 +6388,11 @@ get_variable_numdistinct(VariableStatData *vardata, bool *isdefault)
 		 * in well-written queries.  We could consider examining the VALUES'
 		 * contents to get some real statistics; but that only works if the
 		 * entries are all constants, and it would be pretty expensive anyway.
+		 */
+		/**
+		 *如果Var表示一个VALUES RTE的列，假设它是唯一的。
+		 *这当然可能非常错误，但在编写良好的查询中应该趋于真实。
+		 *我们可以考虑检查VALUES的内容以获取一些真实的统计数据；但这只有在条目都是常量的情况下才有效，而且无论如何都会非常昂贵。
 		 */
 		stadistinct = -1.0;		/* unique (and all non null) */
 	}

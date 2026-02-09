@@ -12,6 +12,28 @@
  *
  *-------------------------------------------------------------------------
  */
+/**
+ *此文件实现了PostgreSQL的ANALYZE命令，用于收集表和索引的统计信息，以便查询优化器能够更有效地执行查询。
+ *主要功能包括：
+ * - analyze_rel()：分析一个关系（表），收集统计信息。
+ * - compute_index_stats()：计算索引的统计信息。
+ * - examine_attribute()：检查一个属性（列），收集统计信息。
+ * - acquire_sample_rows()：从关系中获取样本行，用于分析。
+ * - compare_rows()：比较两行数据，用于排序样本行。
+ * - acquire_inherited_sample_rows()：从继承关系中获取样本行。
+ * - update_attstats()：更新属性统计信息到系统目录。
+ * - std_fetch_func()：标准统计信息的获取函数。
+ * - ind_fetch_func()：索引统计信息的获取函数。
+ * - 该文件还定义了一个结构体AnlIndexData，用于存储分析索引时的相关数据。
+ * - 该文件还包含了一些全局变量和静态函数，用于支持ANALYZE命令的执行。
+ */
+
+/**
+ * vacuum是什么的缩写？答案是：VACUUM是一个SQL命令，用于清理和优化数据库中的表。
+ * VACUUM命令的主要功能包括：
+ * 1. 清理死行：VACUUM会扫描表中的数据页，标记那些已经被删除或更新的行（称为死行），并将它们从
+ * 表中移除，以释放空间并提高查询性能。
+ */
 #include "postgres.h"
 
 #include <math.h>
@@ -273,6 +295,17 @@ analyze_rel(Oid relid, RangeVar *relation,
  * Note that "acquirefunc" is only relevant for the non-inherited case.
  * For the inherited case, acquire_inherited_sample_rows() determines the
  * appropriate acquirefunc for each child table.
+ */
+/**
+ * 此函数用于分析一个关系（表），可以是递归的或非递归的。
+ * @param onerel 要分析的关系对象。
+ * @param params 分析参数，包含选项和日志记录设置等。
+ * @param va_cols 要分析的列列表，如果为NIL则分析所有列。
+ * @param acquirefunc 用于获取样本行的函数指针，非继承情况下使用。
+ * @param relpages 关系的页数，用于估计样本大小。
+ * @param inh 指示是否分析继承关系树。
+ * @param in_outer_xact 指示是否在外部事务中执行分析。
+ * @param elevel 日志记录级别，用于输出分析过程中的信息。
  */
 static void
 do_analyze_rel(Relation onerel, VacuumParams *params,
@@ -1194,6 +1227,20 @@ block_sampling_read_stream_next(ReadStream *stream,
  * unbiased estimates of the average numbers of live and dead rows per
  * block.  The previous sampling method put too much credence in the row
  * density near the start of the table.
+ */
+/**
+ * 此函数用于从表中获取随机样本行。
+ * 选择的行返回在调用者分配的数组rows[]中，该数组必须至少有targrows个条目。
+ * 选择的实际行数作为函数结果返回。
+ * 我们还估计表中活动行和死行的总数，并分别返回到*totalrows和*totaldeadrows中。
+ *
+ * @param onerel
+ * @param elevel
+ * @param rows
+ * @param targrows
+ * @param totalrows
+ * @param totaldeadrows
+ * @return
  */
 static int
 acquire_sample_rows(Relation onerel, int elevel,

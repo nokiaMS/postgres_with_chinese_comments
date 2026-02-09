@@ -24,6 +24,7 @@
  */
 #define RELCACHE_INIT_FILENAME	"pg_internal.init"
 
+//一个关系缓存条目的内容，即RelationData结构体。
 typedef struct RelationData *Relation;
 
 /* ----------------

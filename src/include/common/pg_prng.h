@@ -16,6 +16,11 @@
  * opaque typedef, but we expose its definition to allow it to be
  * embedded in other structs.
  */
+/**
+ * 此结构体定义了伪随机数生成器（PRNG）的状态向量。
+ * 它包含两个64位无符号整数s0和s1，用于维护PRNG的内部状态。
+ * 调用者应该将这个结构体视为一个不透明的类型（opaque typedef），也就是说，不应该直接访问或修改其中的成员，而是通过提供的函数接口来操作它。
+ */
 typedef struct pg_prng_state
 {
 	uint64		s0,

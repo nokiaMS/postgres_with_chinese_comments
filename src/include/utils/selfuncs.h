@@ -31,6 +31,9 @@
  */
 
 /* default selectivity estimate for equalities such as "A = b" */
+/**
+ * 默认的选择性估计值，用于等式条件，例如"A = b"。
+ */
 #define DEFAULT_EQ_SEL	0.005
 
 /* default selectivity estimate for inequalities such as "A < b" */
@@ -84,20 +87,23 @@ typedef struct EstimationInfo
 } EstimationInfo;
 
 /* Return data from examine_variable and friends */
+/**
+ * 此结构体用于存储examine_variable函数及其相关函数返回的数据。
+ */
 typedef struct VariableStatData
 {
-	Node	   *var;			/* the Var or expression tree */
-	RelOptInfo *rel;			/* Relation, or NULL if not identifiable */
-	HeapTuple	statsTuple;		/* pg_statistic tuple, or NULL if none */
+	Node	   *var;			/* the Var or expression tree */ //表示变量或表达式树的节点。
+	RelOptInfo *rel;			/* Relation, or NULL if not identifiable */ //表示关系信息，如果无法识别则为NULL。
+	HeapTuple	statsTuple;		/* pg_statistic tuple, or NULL if none */ //表示pg_statistic元组，如果没有则为NULL。
 	/* NB: if statsTuple!=NULL, it must be freed when caller is done */
-	void		(*freefunc) (HeapTuple tuple);	/* how to free statsTuple */
-	Oid			vartype;		/* exposed type of expression */
-	Oid			atttype;		/* actual type (after stripping relabel) */
-	int32		atttypmod;		/* actual typmod (after stripping relabel) */
+	void		(*freefunc) (HeapTuple tuple);	/* how to free statsTuple */ //表示释放statsTuple的函数指针。
+	Oid			vartype;		/* exposed type of expression */ //表示表达式的暴露类型。
+	Oid			atttype;		/* actual type (after stripping relabel) */ //表示实际类型（去除重标记后）。
+	int32		atttypmod;		/* actual typmod (after stripping relabel) */ //表示实际类型修饰符（去除重标记后）。
 	bool		isunique;		/* matches unique index, DISTINCT or GROUP-BY
-								 * clause */
+								 * clause */ //表示是否匹配唯一索引、DISTINCT或GROUP-BY子句。
 	bool		acl_ok;			/* true if user has SELECT privilege on all
-								 * rows from the table or column */
+								 * rows from the table or column */ //表示用户是否对表或列的所有行具有SELECT权限。
 } VariableStatData;
 
 #define ReleaseVariableStats(vardata)  \

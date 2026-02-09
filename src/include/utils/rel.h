@@ -51,7 +51,10 @@ typedef LockInfoData *LockInfo;
 /*
  * Here are the contents of a relation cache entry.
  */
-
+/**
+ * 此结构体定义了一个关系缓存条目的内容，即RelationData结构体。
+ * 它包含了一个关系的各种信息和状态，包括物理标识符、缓存的文件句柄、引用计数、所属后端的进程号、是否为临时关系、是否在缓存中固定、是否有效、是否索引有效等。
+ */
 typedef struct RelationData
 {
 	RelFileLocator rd_locator;	/* relation physical identifier */

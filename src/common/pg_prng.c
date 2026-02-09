@@ -16,6 +16,10 @@
  *
  *-------------------------------------------------------------------------
  */
+/**
+ *此文件实现了一个伪随机数生成器（PRNG），使用了Blackman和Vigna的xoroshiro128** 1.0算法。
+ *这个算法被选用是因为它具有小巧、快速的特点，适合生成质量较好的64位随机数据。然而，需要注意的是，这个算法并不被认为是加密强度的。
+ */
 
 #include "c.h"
 
@@ -84,6 +88,11 @@ splitmix64(uint64 *state)
 /*
  * Initialize the PRNG state from a 64-bit integer,
  * taking care that we don't produce all-zeroes.
+ */
+/**
+ * 初始化伪随机数生成器PRNG状态的函数。
+ * @param state 指向pg_prng_state结构体的指针，用于存储PRNG的状态。
+ * @param seed 用于初始化PRNG的64位整数种子值。这个种子值将被用来生成PRNG的初始状态。
  */
 void
 pg_prng_seed(pg_prng_state *state, uint64 seed)
@@ -222,6 +231,11 @@ pg_prng_int64_range(pg_prng_state *state, int64 rmin, int64 rmax)
 
 /*
  * Select a random uint32 uniformly from the range [0, PG_UINT32_MAX].
+ */
+/**
+ * 此函数用于生成一个在0和PG_UINT32_MAX之间均匀分布的随机uint32值。
+ * @param state
+ * @return
  */
 uint32
 pg_prng_uint32(pg_prng_state *state)
