@@ -307,11 +307,13 @@ eqsel_internal(PG_FUNCTION_ARGS, bool negate)
 							 ((Const *) other)->constisnull,
 							 varonleft, negate);
 	else
+		//处理 a = b 或 b = a 的情况，调用 var_eq_non_const 函数进行选择性估计。
 		selec = var_eq_non_const(&vardata, operator, collation, other,
 								 varonleft, negate);
 
 	ReleaseVariableStats(vardata);
 
+	//返回估计的选择性值。
 	return selec;
 }
 
@@ -322,6 +324,14 @@ eqsel_internal(PG_FUNCTION_ARGS, bool negate)
  */
 /**
  * 此函数用于估计变量与常量之间的等式条件的选择性，例如 var = const 或 const = var 的情况。
+ * 此函数的逻辑是：
+ *		如果常量为NULL，假设运算符是严格的，因此返回的选择率为0；
+ *		如果变量具有唯一索引或类似于等价的唯一索引条件，例如distinct或者order by，则假设选择性为1/关系中的行数；
+ *		如果统计信息可用，并且安全检查通过，使用统计信息进行更准确的选择性估计；
+ *		否则，进行默认的选择性估计，通常是1/num_distinct或者类似的值。
+ *
+ *		对于<>操作符，选择性可以通过1.0减去等式的选择性再减去nullfrac来计算。
+ *
  * @param vardata 变量的统计数据，包含了关于变量所在列的统计信息，例如最常见值、直方图等。
  * @param oproid
  * @param collation
@@ -538,6 +548,16 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
  *
  * This is exported so that some other estimation functions can use it.
  */
+/**
+ * 此函数的功能是估计变量与非常量之间的等式条件的选择性，例如 var = other 或 other = var 的情况，其中other不是一个常量。
+ * @param vardata
+ * @param oproid
+ * @param collation
+ * @param other
+ * @param varonleft
+ * @param negate
+ * @return
+ */
 double
 var_eq_non_const(VariableStatData *vardata, Oid oproid, Oid collation,
 				 Node *other,
@@ -550,6 +570,7 @@ var_eq_non_const(VariableStatData *vardata, Oid oproid, Oid collation,
 	/*
 	 * Grab the nullfrac for use below.
 	 */
+	//获取nullfrac以供下面使用。
 	if (HeapTupleIsValid(vardata->statsTuple))
 	{
 		Form_pg_statistic stats;
@@ -565,12 +586,17 @@ var_eq_non_const(VariableStatData *vardata, Oid oproid, Oid collation,
 	 * be different from ours, but it's much more likely to be right than
 	 * ignoring the information.)
 	 */
+	//如果变量具有唯一索引、DISTINCT或GROUP-BY子句，假设无论其他因素如何，都只有一个匹配项。（这有点不准确，
+	//因为索引或子句的等式运算符可能与我们的不同，但
+	//它比忽略这些信息更有可能是正确的。）
 	if (vardata->isunique && vardata->rel && vardata->rel->tuples >= 1.0)
 	{
+		//如果变量具有唯一索引，并且相关的关系存在且至少有一行，那么我们可以假设选择性为1.0除以关系中的行数。
 		selec = 1.0 / vardata->rel->tuples;
 	}
 	else if (HeapTupleIsValid(vardata->statsTuple))
 	{
+		//如果统计信息可用，并且安全检查通过，那么我们可以使用统计信息来进行更准确的选择性估计。
 		double		ndistinct;
 		AttStatsSlot sslot;
 
@@ -609,10 +635,12 @@ var_eq_non_const(VariableStatData *vardata, Oid oproid, Oid collation,
 		 * of distinct values and assuming they are equally common. (The guess
 		 * is unlikely to be very good, but we do know a few special cases.)
 		 */
+		//如果统计信息不可用，我们就使用估计的不同值的数量来进行猜测，并假设它们是同样常见的。
 		selec = 1.0 / get_variable_numdistinct(vardata, &isdefault);
 	}
 
 	/* now adjust if we wanted <> rather than = */
+	//通过=的选择率来计算<>的选择率。
 	if (negate)
 		selec = 1.0 - selec - nullfrac;
 
@@ -6336,9 +6364,23 @@ statistic_proc_security_check(VariableStatData *vardata, Oid func_oid)
  */
 /**
  * 此函数估计一个变量的不同值的数量。
- * @param vardata
- * @param isdefault
- * @return
+ * 此函数的逻辑如下：
+ *  1. 如果有一个有效的pg_statistic条目，我们可以使用它来获取stadistinct和stanullfrac的值。
+ *  2. 如果变量是布尔类型，我们假设有两个不同的值
+ *  3. 如果变量来自一个VALUES RTE，我们假设它是唯一的（即不同值的数量等于行数）。
+ *  4. 对于没有统计数据的系统列，我们可以根据列的类型来推断不同值的数量。例如，SelfItemPointerAttributeNumber是唯一的，而TableOidAttributeNumber只有一个值。
+ *	5. 如果有一个唯一索引、DISTINCT或GROUP-BY子句，我们假设变量是唯一的，无论pg_statistic说什么。
+ *	6. 如果stadistinct是一个绝对估计值（大于0），我们使用它。
+ *	7. 否则，我们需要获取关系的大小；如果不可用，我们返回一个默认值。
+ *	8. 如果stadistinct是一个相对估计值，那么我们使用它乘以关系的行数来估计不同值的数量。
+ *	9. 如果没有数据，我们根据关系的大小来估计不同值的数量。
+ *	10. 最后，我们确保返回的估计值是一个正整数。
+ *	11. 这个函数还设置了一个输出参数isdefault，如果返回的估计值是一个默认值而不是基于任何有意义的数据，则将其设置为true。
+ *	12. 这个函数的返回值是一个double类型，表示不同值的估计数量。
+ *
+ * @param vardata examine_variable的结果
+ * @param isdefault 如果结果是默认值而不是基于任何有意义的东西，则设置为true。
+ * @return 不同值的估计数量
  */
 double
 get_variable_numdistinct(VariableStatData *vardata, bool *isdefault)
@@ -6390,7 +6432,7 @@ get_variable_numdistinct(VariableStatData *vardata, bool *isdefault)
 		 * entries are all constants, and it would be pretty expensive anyway.
 		 */
 		/**
-		 *如果Var表示一个VALUES RTE的列，假设它是唯一的。
+		 *如果Var表示一个VALUES RTE的列，那么我们可以假设它是唯一的。
 		 *这当然可能非常错误，但在编写良好的查询中应该趋于真实。
 		 *我们可以考虑检查VALUES的内容以获取一些真实的统计数据；但这只有在条目都是常量的情况下才有效，而且无论如何都会非常昂贵。
 		 */
@@ -6459,6 +6501,7 @@ get_variable_numdistinct(VariableStatData *vardata, bool *isdefault)
 	/*
 	 * If we had a relative estimate, use that.
 	 */
+	//stadistinct是一个相对估计值，那么我们使用它乘以关系的行数来估计不同值的数量。
 	if (stadistinct < 0.0)
 		return clamp_row_est(-stadistinct * ntuples);
 

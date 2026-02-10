@@ -52,6 +52,9 @@
 #define DEFAULT_MATCHING_SEL	0.010
 
 /* default number of distinct values in a table */
+/**
+ * 一个表中默认的不同值的数量。这个值被用来估计等式条件的选择性，例如"A = b"，其中选择性可能被估计为1/num_distinct。
+ */
 #define DEFAULT_NUM_DISTINCT  200
 
 /* default selectivity estimate for boolean and null test nodes */

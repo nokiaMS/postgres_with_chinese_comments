@@ -209,6 +209,11 @@ static double get_parallel_divisor(Path *path);
  * clamp_row_est
  *		Force a row-count estimate to a sane value.
  */
+/**
+ * clamp_row_est - 强制行数估计值在合理范围内。sane value指的是一个合理的行数估计值，既不能过大也不能过小，以确保查询优化器能够做出正确的决策。
+ * @param nrows
+ * @return
+ */
 double
 clamp_row_est(double nrows)
 {
