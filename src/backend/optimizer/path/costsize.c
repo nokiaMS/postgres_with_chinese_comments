@@ -70,6 +70,18 @@
  * cost_index() assumes the passed IndexPath is valid except for its output
  * values.
  *
+ * 中文简述：
+ * 本模块用于计算并设置关系大小与路径成本。路径成本由以下基本参数定义（单位任意）：
+ * seq_page_cost（顺序页读取）、random_page_cost（随机页读取）、cpu_tuple_cost（处理元组的 CPU 成本）、
+ * cpu_index_tuple_cost（处理索引元组的 CPU 成本）、cpu_operator_cost（执行运算符/函数的 CPU 成本）、
+ * parallel_tuple_cost（worker 向 leader 传递元组的成本）、parallel_setup_cost（并行共享内存设置成本）。
+ * 内核通常会做预读，故 seq_page_cost 一般小于 random_page_cost；effective_cache_size 用于粗略估计
+ * Postgres + 操作系统级磁盘缓存中的磁盘页数。每条路径计算 total_cost（取回所有元组的总成本）与
+ * startup_cost（取回首元组前的成本）；存在 LIMIT 或 EXISTS 子查询时可在这两者之间插值估计部分结果成本。
+ * 路径还保存该点及以下计划树中“被禁用”的节点总数（如 enable_seqscan=false），作为成本的一部分；
+ * 本模块大多仅将传入的 Path 用于写入 rows/startup_cost/total_cost，输入通过单独参数传入；
+ * cost_XXXjoin 与 cost_index 等则假定传入路径除输出字段外已填好。
+ *
  *
  * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -214,6 +226,11 @@ static double get_parallel_divisor(Path *path);
  * @param nrows
  * @return
  */
+/**
+ * 功能：将行数估计值限制在合理范围内，避免无穷大和 NaN，保证至少为 1 行并取整。
+ * @param nrows 原始行数估计（可能为 NaN 或超出范围）
+ * @return 限制后的行数，范围 [1, MAXIMUM_ROWCOUNT]，已取整
+ */
 double
 clamp_row_est(double nrows)
 {
@@ -243,6 +260,11 @@ clamp_row_est(double nrows)
  * behavior, we form such sums in int64 arithmetic and then apply this routine
  * to clamp to int32 range.
  */
+/**
+ * 功能：将元组宽度估计值限制在合理的 int32 范围内，防止列宽求和溢出。
+ * @param tuple_width 元组宽度估计值（int64，通常为列宽之和）
+ * @return 限制后的宽度（int32），不超过 MaxAllocSize，非负
+ */
 int32
 clamp_width_est(int64 tuple_width)
 {
@@ -265,6 +287,11 @@ clamp_width_est(int64 tuple_width)
 /*
  * clamp_cardinality_to_long
  *		Cast a Cardinality value to a sane long value.
+ */
+/**
+ * 功能：将基数（Cardinality）转换为安全的 long 值，处理 NaN、非正数及溢出。
+ * @param x 要转换的基数（double）
+ * @return 转换后的 long；x <= 0 或 NaN 时返回 0，溢出时返回 LONG_MAX
  */
 long
 clamp_cardinality_to_long(Cardinality x)
@@ -308,6 +335,14 @@ clamp_cardinality_to_long(Cardinality x)
  *   root:        包含查询优化相关信息的顶层结构体
  *   baserel:     待扫描的基础关系（表）的信息结构体
  *   param_info:  路径相关的参数信息（如参数化路径的行估计值），可为 NULL
+ */
+/**
+ * 功能：计算顺序扫描路径的成本，设置 path 的 rows、startup_cost、total_cost 和 disabled_nodes。
+ * @param path       待填充的路径，必须为基础关系的路径
+ * @param root       规划器全局信息
+ * @param baserel    要扫描的基础关系（relid > 0，RTE_RELATION）
+ * @param param_info 参数化路径的 ParamPathInfo，非参数化时为 NULL
+ * @return 无
  */
 void
 cost_seqscan(Path *path, PlannerInfo *root,
@@ -400,6 +435,14 @@ cost_seqscan(Path *path, PlannerInfo *root,
  * 'baserel' is the relation to be scanned
  * 'param_info' is the ParamPathInfo if this is a parameterized path, else NULL
  */
+/**
+ * 功能：计算采样扫描（SampleScan）路径的成本，用于 TABLESAMPLE 子句。
+ * @param path       待填充的路径
+ * @param root       规划器全局信息
+ * @param baserel    被采样扫描的基础关系
+ * @param param_info 参数化路径信息，非参数化时为 NULL
+ * @return 无
+ */
 void
 cost_samplescan(Path *path, PlannerInfo *root,
 				RelOptInfo *baserel, ParamPathInfo *param_info)
@@ -476,6 +519,15 @@ cost_samplescan(Path *path, PlannerInfo *root,
  * both 'rel' and 'param_info'.  This is useful when the path doesn't exactly
  * correspond to any particular RelOptInfo.
  */
+/**
+ * 功能：计算 Gather 路径的成本，从多个并行 worker 收集结果到 leader。
+ * @param path       待填充的 Gather 路径
+ * @param root       规划器全局信息
+ * @param rel        目标关系
+ * @param param_info 参数化路径信息，非参数化时为 NULL
+ * @param rows       若非 NULL，则用其指向的值作为行估计，覆盖 rel/param_info
+ * @return 无
+ */
 void
 cost_gather(GatherPath *path, PlannerInfo *root,
 			RelOptInfo *rel, ParamPathInfo *param_info,
@@ -514,6 +566,18 @@ cost_gather(GatherPath *path, PlannerInfo *root,
  * streams, we need about N*log2(N) tuple comparisons to construct the heap at
  * startup, and then for each output tuple, about log2(N) comparisons to
  * replace the top heap entry with the next tuple from the same stream.
+ */
+/**
+ * 功能：计算 GatherMerge 路径的成本，合并多路已排序输入并用堆维护。
+ * @param path                   待填充的 GatherMerge 路径
+ * @param root                   规划器全局信息
+ * @param rel                    目标关系
+ * @param param_info             参数化路径信息，非参数化时为 NULL
+ * @param input_disabled_nodes   输入路径上被禁用节点数
+ * @param input_startup_cost     各输入流启动成本之和
+ * @param input_total_cost       各输入流总成本之和
+ * @param rows                   若非 NULL，则用其指向的值作为行估计
+ * @return 无
  */
 void
 cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
@@ -589,6 +653,14 @@ cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
  * restrictions.  Any additional quals evaluated as qpquals may reduce the
  * number of returned tuples, but they won't reduce the number of tuples
  * we have to fetch from the table, so they don't reduce the scan cost.
+ */
+/**
+ * 功能：计算索引扫描（IndexScan/IndexOnlyScan）路径的成本，设置 rows、startup_cost、total_cost 及 indextotalcost、indexselectivity。
+ * @param path         待填充的 IndexPath，其余字段应由调用方填好
+ * @param root         规划器全局信息
+ * @param loop_count   索引扫描重复次数，用于缓存效应估计
+ * @param partial_path 是否为并行部分路径
+ * @return 无
  */
 void
 cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
@@ -880,6 +952,12 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
  * qual_clauses, and the result, are lists of RestrictInfos.
  * indexclauses is a list of IndexClauses.
  */
+/**
+ * 功能：从索引扫描的限定条件中提取需作为 qpqual 施加的条件，索引无法处理的条件需在扫描后过滤。
+ * @param qual_clauses 待施加的限定条件（RestrictInfo 列表）
+ * @param indexclauses 索引子句列表（IndexClause）
+ * @return 需作为 qpqual 的 RestrictInfo 列表
+ */
 static List *
 extract_nonindex_conditions(List *qual_clauses, List *indexclauses)
 {
@@ -937,6 +1015,14 @@ extract_nonindex_conditions(List *qual_clauses, List *indexclauses)
  * Caller is expected to have ensured that tuples_fetched is greater than zero
  * and rounded to integer (see clamp_row_est).  The result will likewise be
  * greater than zero and integral.
+ */
+/**
+ * 功能：在考虑缓存效应后估计实际需要读取的页数，使用 Mackert-Lohman 公式。
+ * @param tuples_fetched 要获取的元组数（N*s 的乘积）
+ * @param pages         对象页数（表或索引）
+ * @param index_pages   加入总表空间计算的索引页数
+ * @param root          规划器全局信息
+ * @return 估计读取的页数，大于 0 且为整数
  */
 double
 index_pages_fetched(double tuples_fetched, BlockNumber pages,
@@ -1003,6 +1089,11 @@ index_pages_fetched(double tuples_fetched, BlockNumber pages,
  * not completely clear, and detecting duplicates is difficult, so ignore it
  * for now.
  */
+/**
+ * 功能：计算位图索引路径所用索引的总页数，递归遍历 BitmapAndPath/BitmapOrPath/IndexPath。
+ * @param bitmapqual 位图路径树根（BitmapAndPath、BitmapOrPath 或 IndexPath）
+ * @return 索引总页数
+ */
 static double
 get_indexpath_pages(Path *bitmapqual)
 {
@@ -1052,6 +1143,16 @@ get_indexpath_pages(Path *bitmapqual)
  *
  * Note: the component IndexPaths in bitmapqual should have been costed
  * using the same loop_count.
+ */
+/**
+ * 功能：计算“位图索引扫描+堆访问”路径的成本，先通过位图从索引得到 TID，再按页顺序访问堆。
+ * @param path       待填充的路径
+ * @param root       规划器全局信息
+ * @param baserel    被扫描的基础关系
+ * @param param_info 参数化路径信息，非参数化时为 NULL
+ * @param bitmapqual 位图路径树（IndexPath/BitmapAndPath/BitmapOrPath）
+ * @param loop_count 索引扫描重复次数，用于缓存估计
+ * @return 无
  */
 void
 cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
@@ -1152,6 +1253,13 @@ cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
  * cost_bitmap_tree_node
  *		Extract cost and selectivity from a bitmap tree node (index/and/or)
  */
+/**
+ * 功能：从位图树节点（IndexPath/BitmapAndPath/BitmapOrPath）提取成本与选择率。
+ * @param path 位图树节点
+ * @param cost 输出：该节点的成本
+ * @param selec 输出：该节点的选择率
+ * @return 无
+ */
 void
 cost_bitmap_tree_node(Path *path, Cost *cost, Selectivity *selec)
 {
@@ -1194,6 +1302,12 @@ cost_bitmap_tree_node(Path *path, Cost *cost, Selectivity *selec)
  * truly a Path, but it has enough path-like properties (costs in particular)
  * to warrant treating it as one.  We don't bother to set the path rows field,
  * however.
+ */
+/**
+ * 功能：估计 BitmapAnd 节点的成本，选择率按各输入独立相乘。
+ * @param path 待填充的 BitmapAnd 路径
+ * @param root 规划器全局信息
+ * @return 无
  */
 void
 cost_bitmap_and_node(BitmapAndPath *path, PlannerInfo *root)
@@ -1239,6 +1353,12 @@ cost_bitmap_and_node(BitmapAndPath *path, PlannerInfo *root)
  *		Estimate the cost of a BitmapOr node
  *
  * See comments for cost_bitmap_and_node.
+ */
+/**
+ * 功能：估计 BitmapOr 节点的成本，选择率按各输入不重叠相加（如 x IN (list)），最后截断至 1.0。
+ * @param path 待填充的 BitmapOr 路径
+ * @param root 规划器全局信息
+ * @return 无
  */
 void
 cost_bitmap_or_node(BitmapOrPath *path, PlannerInfo *root)
@@ -1287,6 +1407,15 @@ cost_bitmap_or_node(BitmapOrPath *path, PlannerInfo *root)
  * 'baserel' is the relation to be scanned
  * 'tidquals' is the list of TID-checkable quals
  * 'param_info' is the ParamPathInfo if this is a parameterized path, else NULL
+ */
+/**
+ * 功能：计算按 TID 扫描（TidScan）路径的成本，适用于 CTID = ...、CURRENT OF、CTID = ANY(array) 等条件。
+ * @param path       待填充的路径
+ * @param root       规划器全局信息
+ * @param baserel    被扫描的基础关系
+ * @param tidquals   可做 TID 检查的限定条件列表
+ * @param param_info 参数化路径信息，非参数化时为 NULL
+ * @return 无
  */
 void
 cost_tidscan(Path *path, PlannerInfo *root,
@@ -1393,6 +1522,15 @@ cost_tidscan(Path *path, PlannerInfo *root,
  * 'tidrangequals' is the list of TID-checkable range quals
  * 'param_info' is the ParamPathInfo if this is a parameterized path, else NULL
  */
+/**
+ * 功能：计算 TID 范围扫描（TidRangeScan）路径的成本，第一页按随机页计，后续页按顺序页计。
+ * @param path           待填充的路径
+ * @param root           规划器全局信息
+ * @param baserel        被扫描的基础关系
+ * @param tidrangequals  TID 范围限定条件列表
+ * @param param_info     参数化路径信息，非参数化时为 NULL
+ * @return 无
+ */
 void
 cost_tidrangescan(Path *path, PlannerInfo *root,
 				  RelOptInfo *baserel, List *tidrangequals,
@@ -1487,6 +1625,15 @@ cost_tidrangescan(Path *path, PlannerInfo *root,
  * 'param_info' is the ParamPathInfo if this is a parameterized path, else NULL
  * 'trivial_pathtarget' is true if the pathtarget is believed to be trivial.
  */
+/**
+ * 功能：计算子查询扫描（SubqueryScan）路径的成本，成本主要为子计划成本加上限制条件与 tlist 的求值成本。
+ * @param path                子查询扫描路径（输出）
+ * @param root                规划器全局信息
+ * @param baserel             子查询对应的基础关系
+ * @param param_info          参数化路径信息，非参数化时为 NULL
+ * @param trivial_pathtarget  若为 true 且无限制条件则可能被优化掉
+ * @return 无
+ */
 void
 cost_subqueryscan(SubqueryScanPath *path, PlannerInfo *root,
 				  RelOptInfo *baserel, ParamPathInfo *param_info,
@@ -1568,6 +1715,14 @@ cost_subqueryscan(SubqueryScanPath *path, PlannerInfo *root,
  * 'baserel' is the relation to be scanned
  * 'param_info' is the ParamPathInfo if this is a parameterized path, else NULL
  */
+/**
+ * 功能：计算函数扫描（FunctionScan）路径的成本，函数求值成本算作启动成本。
+ * @param path       待填充的路径
+ * @param root       规划器全局信息
+ * @param baserel    函数 RTE 对应的基础关系
+ * @param param_info 参数化路径信息，非参数化时为 NULL
+ * @return 无
+ */
 void
 cost_functionscan(Path *path, PlannerInfo *root,
 				  RelOptInfo *baserel, ParamPathInfo *param_info)
@@ -1630,6 +1785,14 @@ cost_functionscan(Path *path, PlannerInfo *root,
  * 'baserel' is the relation to be scanned
  * 'param_info' is the ParamPathInfo if this is a parameterized path, else NULL
  */
+/**
+ * 功能：计算表函数扫描（TableFuncScan）路径的成本，含表函数表达式求值及限制条件、tlist 的 CPU 成本。
+ * @param path       待填充的路径
+ * @param root       规划器全局信息
+ * @param baserel    表函数 RTE 对应的基础关系
+ * @param param_info 参数化路径信息，非参数化时为 NULL
+ * @return 无
+ */
 void
 cost_tablefuncscan(Path *path, PlannerInfo *root,
 				   RelOptInfo *baserel, ParamPathInfo *param_info)
@@ -1687,6 +1850,14 @@ cost_tablefuncscan(Path *path, PlannerInfo *root,
  * 'baserel' is the relation to be scanned
  * 'param_info' is the ParamPathInfo if this is a parameterized path, else NULL
  */
+/**
+ * 功能：计算 VALUES 列表扫描（ValuesScan）路径的成本，无磁盘 I/O，主要为 CPU 成本。
+ * @param path       待填充的路径
+ * @param root       规划器全局信息
+ * @param baserel    VALUES RTE 对应的基础关系
+ * @param param_info 参数化路径信息，非参数化时为 NULL
+ * @return 无
+ */
 void
 cost_valuesscan(Path *path, PlannerInfo *root,
 				RelOptInfo *baserel, ParamPathInfo *param_info)
@@ -1738,6 +1909,14 @@ cost_valuesscan(Path *path, PlannerInfo *root,
  * referenced CTE query are added into the final plan as initplan costs,
  * and should NOT be counted here.
  */
+/**
+ * 功能：计算 CTE 扫描（CteScan）路径的成本，用于普通 CTE 与自引用 CTE；CTE 查询本身成本作为 initplan 不在此处计。
+ * @param path       待填充的路径
+ * @param root       规划器全局信息
+ * @param baserel    CTE RTE 对应的基础关系
+ * @param param_info 参数化路径信息，非参数化时为 NULL
+ * @return 无
+ */
 void
 cost_ctescan(Path *path, PlannerInfo *root,
 			 RelOptInfo *baserel, ParamPathInfo *param_info)
@@ -1780,6 +1959,14 @@ cost_ctescan(Path *path, PlannerInfo *root,
  * cost_namedtuplestorescan
  *	  Determines and returns the cost of scanning a named tuplestore.
  */
+/**
+ * 功能：计算命名 tuplestore 扫描路径的成本，主要为 tuplestore 操作与限制条件、tlist 的 CPU 成本。
+ * @param path       待填充的路径
+ * @param root       规划器全局信息
+ * @param baserel    命名 tuplestore RTE 对应的基础关系
+ * @param param_info 参数化路径信息，非参数化时为 NULL
+ * @return 无
+ */
 void
 cost_namedtuplestorescan(Path *path, PlannerInfo *root,
 						 RelOptInfo *baserel, ParamPathInfo *param_info)
@@ -1818,6 +2005,14 @@ cost_namedtuplestorescan(Path *path, PlannerInfo *root,
  * cost_resultscan
  *	  Determines and returns the cost of scanning an RTE_RESULT relation.
  */
+/**
+ * 功能：计算 RTE_RESULT 关系（无数据源的结果扫描）的路径成本，仅含 CPU 成本，无磁盘 I/O。
+ * @param path       待填充的路径
+ * @param root       规划器全局信息
+ * @param baserel    RTE_RESULT 对应的基础关系
+ * @param param_info 参数化路径信息，非参数化时为 NULL
+ * @return 无
+ */
 void
 cost_resultscan(Path *path, PlannerInfo *root,
 				RelOptInfo *baserel, ParamPathInfo *param_info)
@@ -1855,6 +2050,13 @@ cost_resultscan(Path *path, PlannerInfo *root,
  *	  and also the estimated output size.
  *
  * We are given Paths for the nonrecursive and recursive terms.
+ */
+/**
+ * 功能：计算递归 UNION 的成本与输出行数估计，假定约 10 次递归迭代并加上 tuplestore 每行成本。
+ * @param runion 递归 UNION 路径（输出）
+ * @param nrterm 非递归项路径
+ * @param rterm  递归项路径
+ * @return 无
  */
 void
 cost_recursive_union(Path *runion, Path *nrterm, Path *rterm)
@@ -1927,6 +2129,17 @@ cost_recursive_union(Path *runion, Path *nrterm, Path *rterm)
  * 'comparison_cost' is the extra cost per comparison, if any
  * 'sort_mem' is the number of kilobytes of work memory allowed for the sort
  * 'limit_tuples' is the bound on the number of output tuples; -1 if no bound
+ */
+/**
+ * 功能：计算用 tuplesort 排序的成本（不含读入数据的成本），数据量小于 sort_mem 时做内存排序，否则多路归并。
+ * @param startup_cost    输出：启动成本
+ * @param run_cost        输出：运行成本
+ * @param tuples          待排序元组数
+ * @param width           平均元组宽度（字节）
+ * @param comparison_cost 每次比较的额外成本
+ * @param sort_mem        排序可用工作内存（KB）
+ * @param limit_tuples    输出元组上界，-1 表示无界
+ * @return 无
  */
 static void
 cost_tuplesort(Cost *startup_cost, Cost *run_cost,
@@ -2029,6 +2242,22 @@ cost_tuplesort(Cost *startup_cost, Cost *run_cost,
  * We estimate the number of groups into which the relation is divided by the
  * leading pathkeys, and then calculate the cost of sorting a single group
  * with tuplesort using cost_tuplesort().
+ */
+/**
+ * 功能：计算增量排序（Incremental Sort）路径的成本，输入已按 pathkeys 的前 presorted_keys 列有序。
+ * @param path                 增量排序路径（输出）
+ * @param root                 规划器全局信息
+ * @param pathkeys             排序键列表
+ * @param presorted_keys       输入已有序的前导键数量
+ * @param input_disabled_nodes 输入路径上被禁用节点数
+ * @param input_startup_cost   输入启动成本
+ * @param input_total_cost     输入总成本
+ * @param input_tuples         输入元组数
+ * @param width                元组宽度
+ * @param comparison_cost      每次比较成本
+ * @param sort_mem             排序可用内存（KB）
+ * @param limit_tuples         输出元组上界，-1 表示无界
+ * @return 无
  */
 void
 cost_incremental_sort(Path *path,
@@ -2174,6 +2403,20 @@ cost_incremental_sort(Path *path,
  * (Actually, the thing we'd most likely be interested in is just the number
  * of sort keys, which all callers *could* supply.)
  */
+/**
+ * 功能：计算排序（Sort）路径的成本，含读入输入数据的成本，在 input_cost 基础上加上 cost_tuplesort 的排序成本。
+ * @param path                 排序路径（输出）
+ * @param root                 规划器全局信息
+ * @param pathkeys             排序键列表（可为 NIL）
+ * @param input_disabled_nodes 输入路径上被禁用节点数
+ * @param input_cost           输入总成本
+ * @param tuples               输入元组数
+ * @param width                元组宽度
+ * @param comparison_cost      每次比较成本
+ * @param sort_mem             排序可用内存（KB）
+ * @param limit_tuples         输出元组上界，-1 表示无界
+ * @return 无
+ */
 void
 cost_sort(Path *path, PlannerInfo *root,
 		  List *pathkeys, int input_disabled_nodes,
@@ -2203,6 +2446,13 @@ cost_sort(Path *path, PlannerInfo *root,
  *	  Estimate the cost of the non-partial paths in a Parallel Append.
  *	  The non-partial paths are assumed to be the first "numpaths" paths
  *	  from the subpaths list, and to be in order of decreasing cost.
+ */
+/**
+ * 功能：估计并行 Append 中非部分子路径的总成本，模拟多 worker 分配后返回最大 worker 成本。
+ * @param subpaths         子路径列表
+ * @param numpaths         非部分路径数量
+ * @param parallel_workers 并行 worker 数
+ * @return 估计的非部分路径成本（取各 worker 中最大者）
  */
 static Cost
 append_nonpartial_cost(List *subpaths, int numpaths, int parallel_workers)
@@ -2279,6 +2529,11 @@ append_nonpartial_cost(List *subpaths, int numpaths, int parallel_workers)
 /*
  * cost_append
  *	  Determines and returns the cost of an Append node.
+ */
+/**
+ * 功能：计算 Append 路径的成本与行数，无排序时启动成本为最贵子路径的启动成本，总成本为各子路径成本之和。
+ * @param apath Append 路径（输出）
+ * @return 无
  */
 void
 cost_append(AppendPath *apath)
@@ -2462,6 +2717,18 @@ cost_append(AppendPath *apath)
  * 'input_total_cost' is the sum of the input streams' total costs
  * 'tuples' is the number of tuples in all the streams
  */
+/**
+ * 功能：计算 MergeAppend 路径的成本，合并多路已排序输入，用堆维护；启动时约 N*log2(N) 次比较建堆。
+ * @param path                 MergeAppend 路径（输出）
+ * @param root                 规划器全局信息
+ * @param pathkeys             排序键列表
+ * @param n_streams            输入流数量
+ * @param input_disabled_nodes  各输入流被禁用节点数之和
+ * @param input_startup_cost    各输入流启动成本之和
+ * @param input_total_cost      各输入流总成本之和
+ * @param tuples                所有流的元组总数
+ * @return 无
+ */
 void
 cost_merge_append(Path *path, PlannerInfo *root,
 				  List *pathkeys, int n_streams,
@@ -2512,6 +2779,16 @@ cost_merge_append(Path *path, PlannerInfo *root,
  * Note that here we are estimating the costs for the first scan of the
  * relation, so the materialization is all overhead --- any savings will
  * occur only on rescan, which is estimated in cost_rescan.
+ */
+/**
+ * 功能：计算物化（Material）路径的成本，含读入输入的成本；若数据超 work_mem 则计入溢出磁盘成本。
+ * @param path                 物化路径（输出）
+ * @param input_disabled_nodes  输入路径上被禁用节点数
+ * @param input_startup_cost    输入启动成本
+ * @param input_total_cost      输入总成本
+ * @param tuples                元组数
+ * @param width                 元组宽度（字节）
+ * @return 无
  */
 void
 cost_material(Path *path,
@@ -2570,6 +2847,14 @@ cost_material(Path *path,
  * with too many distinct parameter values.  The worst-case here is that we
  * never see any parameter value twice, in which case we'd never get a cache
  * hit and caching would be a complete waste of effort.
+ */
+/**
+ * 功能：估计 Memoize 节点重扫描的成本；根据预期调用次数与不同参数集数量估算缓存命中率并据此设置成本。
+ * @param root                规划器全局信息
+ * @param mpath               Memoize 路径
+ * @param rescan_startup_cost 输出：重扫描启动成本
+ * @param rescan_total_cost   输出：重扫描总成本
+ * @return 无
  */
 static void
 cost_memoize_rescan(PlannerInfo *root, MemoizePath *mpath,
@@ -2711,6 +2996,22 @@ cost_memoize_rescan(PlannerInfo *root, MemoizePath *mpath,
  *
  * Note: when aggstrategy == AGG_SORTED, caller must ensure that input costs
  * are for appropriately-sorted input.
+ */
+/**
+ * 功能：计算聚合（Agg）路径的成本与输出行数，含输入成本；支持 SORTED/HASHED/PLAIN 等策略。
+ * @param path              聚合路径（输出）
+ * @param root              规划器全局信息
+ * @param aggstrategy       聚合策略（AGG_SORTED/AGG_HASHED/AGG_PLAIN 等）
+ * @param aggcosts          聚合子句成本；无聚合函数时可传 NULL
+ * @param numGroupCols      分组列数
+ * @param numGroups         分组数估计
+ * @param quals             限定条件
+ * @param disabled_nodes    被禁用节点数
+ * @param input_startup_cost 输入启动成本
+ * @param input_total_cost  输入总成本
+ * @param input_tuples      输入元组数
+ * @param input_width       输入元组宽度
+ * @return 无
  */
 void
 cost_agg(Path *path, PlannerInfo *root,
@@ -2913,6 +3214,13 @@ cost_agg(Path *path, PlannerInfo *root,
  * in the first partition.  Here we attempt to estimate just how many
  * 'input_tuples' the WindowAgg will need to read for the given WindowClause
  * before the first tuple can be output.
+ */
+/**
+ * 功能：估计 WindowAgg 在输出第一个元组前需要从子节点读取的元组数（与 PARTITION BY/ORDER BY 相关）。
+ * @param root        规划器全局信息
+ * @param wc          窗口子句
+ * @param input_tuples 子节点输入元组数
+ * @return 估计的“启动”需读取的元组数
  */
 static double
 get_windowclause_startup_tuples(PlannerInfo *root, WindowClause *wc,
@@ -3128,6 +3436,18 @@ get_windowclause_startup_tuples(PlannerInfo *root, WindowClause *wc,
  *
  * Input is assumed already properly sorted.
  */
+/**
+ * 功能：计算 WindowAgg 路径的成本，含输入成本；假定输入已按窗口子句正确排序。
+ * @param path                窗口聚合路径（输出）
+ * @param root                规划器全局信息
+ * @param windowFuncs         窗口函数列表
+ * @param winclause           窗口子句
+ * @param input_disabled_nodes 输入路径上被禁用节点数
+ * @param input_startup_cost  输入启动成本
+ * @param input_total_cost    输入总成本
+ * @param input_tuples        输入元组数
+ * @return 无
+ */
 void
 cost_windowagg(Path *path, PlannerInfo *root,
 			   List *windowFuncs, WindowClause *winclause,
@@ -3225,6 +3545,19 @@ cost_windowagg(Path *path, PlannerInfo *root,
  * Note: caller must ensure that input costs are for appropriately-sorted
  * input.
  */
+/**
+ * 功能：计算 Group 路径的成本与输出行数，含输入成本；调用方需保证输入成本对应已排序输入。
+ * @param path                分组路径（输出）
+ * @param root                规划器全局信息
+ * @param numGroupCols        分组列数
+ * @param numGroups           分组数估计
+ * @param quals               限定条件
+ * @param input_disabled_nodes 输入路径上被禁用节点数
+ * @param input_startup_cost  输入启动成本
+ * @param input_total_cost    输入总成本
+ * @param input_tuples        输入元组数
+ * @return 无
+ */
 void
 cost_group(Path *path, PlannerInfo *root,
 		   int numGroupCols, double numGroups,
@@ -3296,6 +3629,16 @@ cost_group(Path *path, PlannerInfo *root,
  * 'outer_path' is the outer input to the join
  * 'inner_path' is the inner input to the join
  * 'extra' contains miscellaneous information about the join
+ */
+/**
+ * 功能：嵌套循环连接路径的初步成本估计；快速给出启动成本与总成本下界，供淘汰路径用，细节由 final_cost_nestloop 完成。
+ * @param root      规划器全局信息
+ * @param workspace 输出：启动成本、总成本等，供 final_cost_nestloop 使用
+ * @param jointype  连接类型
+ * @param outer_path 外表路径
+ * @param inner_path 内表路径
+ * @param extra     连接额外信息
+ * @return 无
  */
 void
 initial_cost_nestloop(PlannerInfo *root, JoinCostWorkspace *workspace,
@@ -3378,6 +3721,14 @@ initial_cost_nestloop(PlannerInfo *root, JoinCostWorkspace *workspace,
  * 'path' is already filled in except for the rows and cost fields
  * 'workspace' is the result from initial_cost_nestloop
  * 'extra' contains miscellaneous information about the join
+ */
+/**
+ * 功能：嵌套循环连接路径的最终成本与结果行数估计；填充 path 的 rows 与 cost 字段。
+ * @param root      规划器全局信息
+ * @param path      嵌套循环路径（除 rows、cost 外已填充）
+ * @param workspace initial_cost_nestloop 的结果
+ * @param extra     连接额外信息
+ * @return 无
  */
 void
 final_cost_nestloop(PlannerInfo *root, NestPath *path,
@@ -3581,6 +3932,20 @@ final_cost_nestloop(PlannerInfo *root, NestPath *path,
  *
  * Note: outersortkeys and innersortkeys should be NIL if no explicit
  * sort is needed because the respective source path is already ordered.
+ */
+/**
+ * 功能：归并连接路径的初步成本估计；快速给出启动/总成本下界，并利用缓存得到扫描选择率，排序成本在此阶段计入。
+ * @param root                 规划器全局信息
+ * @param workspace             输出：供 final_cost_mergejoin 使用的数据
+ * @param jointype             连接类型
+ * @param mergeclauses          用作归并条件的连接子句列表
+ * @param outer_path            外表路径
+ * @param inner_path            内表路径
+ * @param outersortkeys         外表排序键（若已有序可为 NIL）
+ * @param innersortkeys         内表排序键（若已有序可为 NIL）
+ * @param outer_presorted_keys  外表已预排序键数量
+ * @param extra                 连接额外信息
+ * @return 无
  */
 void
 initial_cost_mergejoin(PlannerInfo *root, JoinCostWorkspace *workspace,
@@ -3867,6 +4232,14 @@ initial_cost_mergejoin(PlannerInfo *root, JoinCostWorkspace *workspace,
  * 'workspace' is the result from initial_cost_mergejoin
  * 'extra' contains miscellaneous information about the join
  */
+/**
+ * 功能：归并连接路径的最终成本与结果行数估计；决定是否需 mark/restore、是否物化内表，并填充 path 的 rows 与 cost。
+ * @param root      规划器全局信息
+ * @param path      归并连接路径（除 rows、cost、skip_mark_restore、materialize_inner 外已填充）
+ * @param workspace initial_cost_mergejoin 的结果
+ * @param extra     连接额外信息
+ * @return 无
+ */
 void
 final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 					 JoinCostWorkspace *workspace,
@@ -4111,6 +4484,13 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 /*
  * run mergejoinscansel() with caching
  */
+/**
+ * 功能：带缓存的 mergejoinscansel；按 pathkey 在 rinfo 的缓存中查找或计算并缓存归并扫描选择率。
+ * @param root   规划器全局信息
+ * @param rinfo  限制条件
+ * @param pathkey 路径键（用于匹配缓存）
+ * @return 归并扫描选择率缓存条目
+ */
 static MergeScanSelCache *
 cached_scansel(PlannerInfo *root, RestrictInfo *rinfo, PathKey *pathkey)
 {
@@ -4189,6 +4569,18 @@ cached_scansel(PlannerInfo *root, RestrictInfo *rinfo, PathKey *pathkey)
  * 'extra' contains miscellaneous information about the join
  * 'parallel_hash' indicates that inner_path is partial and that a shared
  *		hash table will be built in parallel
+ */
+/**
+ * 功能：哈希连接路径的初步成本估计；快速给出启动/总成本下界，含建哈希表与批处理 I/O，CPU 成本留待 final_cost_hashjoin。
+ * @param root        规划器全局信息
+ * @param workspace   输出：供 final_cost_hashjoin 使用的数据
+ * @param jointype    连接类型
+ * @param hashclauses 用作哈希条件的连接子句列表
+ * @param outer_path  外表路径
+ * @param inner_path  内表路径
+ * @param extra       连接额外信息
+ * @param parallel_hash 是否并行建共享哈希表（内表为部分路径）
+ * @return 无
  */
 void
 initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
@@ -4304,6 +4696,14 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
  *		num_batches
  * 'workspace' is the result from initial_cost_hashjoin
  * 'extra' contains miscellaneous information about the join
+ */
+/**
+ * 功能：哈希连接路径的最终成本与结果行数估计；填充 path 的 rows、cost 及 num_batches。
+ * @param root      规划器全局信息
+ * @param path      哈希连接路径（除 rows、cost、num_batches 外已填充）
+ * @param workspace initial_cost_hashjoin 的结果
+ * @param extra     连接额外信息
+ * @return 无
  */
 void
 final_cost_hashjoin(PlannerInfo *root, HashPath *path,
@@ -4564,6 +4964,13 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
  * Note: we could dig the subplan's Plan out of the root list, but in practice
  * all callers have it handy already, so we make them pass it.
  */
+/**
+ * 功能：计算子计划（SubPlan/initplan）的启动成本与每次调用成本，结果写入 subplan->startup_cost 与 per_call_cost。
+ * @param root    规划器全局信息
+ * @param subplan 子计划节点
+ * @param plan    子计划对应的 Plan（由调用方传入）
+ * @return 无
+ */
 void
 cost_subplan(PlannerInfo *root, SubPlan *subplan, Plan *plan)
 {
@@ -4670,6 +5077,14 @@ cost_subplan(PlannerInfo *root, SubPlan *subplan, Plan *plan)
  * being cheaper due to disk block caching; what we are concerned with is
  * plan types wherein the executor caches results explicitly, or doesn't
  * redo startup calculations, etc.
+ */
+/**
+ * 功能：估计给定路径在首次扫描后的重扫描成本；对会显式缓存或不再重做启动计算的路径类型返回更低成本。
+ * @param root                规划器全局信息
+ * @param path                已构造好的路径
+ * @param rescan_startup_cost 输出：重扫描启动成本
+ * @param rescan_total_cost   输出：重扫描总成本
+ * @return 无
  */
 static void
 cost_rescan(PlannerInfo *root, Path *path,
@@ -4786,6 +5201,13 @@ cost_rescan(PlannerInfo *root, Path *path,
  * Note: in some code paths root can be passed as NULL, resulting in
  * slightly worse estimates.
  */
+/**
+ * 功能：估计 WHERE 子句的 CPU 评估成本；输入可为隐式 AND 的布尔表达式列表或 RestrictInfo 列表，结果含启动成本与每次评估成本。
+ * @param cost  输出：限定条件成本（启动 + 每次评估）
+ * @param quals 限定条件列表（表达式或 RestrictInfo）
+ * @param root  规划器全局信息（可为 NULL，估计略差）
+ * @return 无
+ */
 void
 cost_qual_eval(QualCost *cost, List *quals, PlannerInfo *root)
 {
@@ -4812,6 +5234,13 @@ cost_qual_eval(QualCost *cost, List *quals, PlannerInfo *root)
  * cost_qual_eval_node
  *		As above, for a single RestrictInfo or expression.
  */
+/**
+ * 功能：对单个 RestrictInfo 或表达式估计 CPU 评估成本，与 cost_qual_eval 逻辑一致。
+ * @param cost 输出：限定条件成本
+ * @param qual 单个限定条件（RestrictInfo 或表达式节点）
+ * @param root 规划器全局信息
+ * @return 无
+ */
 void
 cost_qual_eval_node(QualCost *cost, Node *qual, PlannerInfo *root)
 {
@@ -4826,6 +5255,12 @@ cost_qual_eval_node(QualCost *cost, Node *qual, PlannerInfo *root)
 	*cost = context.total;
 }
 
+/**
+ * 功能：遍历表达式树累计限定条件评估成本；对 RestrictInfo 使用/填充 eval_cost 缓存，对函数/运算符按 pg_proc.procost 计费。
+ * @param node    当前表达式节点
+ * @param context 累计成本的上下文
+ * @return 是否继续遍历子节点（RestrictInfo 时返回 false）
+ */
 static bool
 cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
 {
@@ -5102,6 +5537,14 @@ cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
  * some of the quals.  We assume baserestrictcost was previously set by
  * set_baserel_size_estimates().
  */
+/**
+ * 功能：计算基表限制条件及下推到扫描的可移动连接条件的评估成本，结果写入 *qpqual_cost；假定 baserestrictcost 已由 set_baserel_size_estimates 设置。
+ * @param root        规划器全局信息
+ * @param baserel     基表 RelOptInfo
+ * @param param_info  参数化路径信息（若有下推子句）
+ * @param qpqual_cost 输出：限定条件成本
+ * @return 无
+ */
 static void
 get_restriction_qual_cost(PlannerInfo *root, RelOptInfo *baserel,
 						  ParamPathInfo *param_info,
@@ -5143,6 +5586,18 @@ get_restriction_qual_cost(PlannerInfo *root, RelOptInfo *baserel,
  *	restrictlist: join quals
  * Output parameters:
  *	*semifactors is filled in (see pathnodes.h for field definitions)
+ */
+/**
+ * 功能：估计 SEMI/ANTI 或 inner_unique 连接对内表扫描比例等因子，供各连接成本函数使用；结果写入 *semifactors。
+ * @param root        规划器全局信息
+ * @param joinrel     当前连接关系
+ * @param outerrel    外表
+ * @param innerrel    内表
+ * @param jointype    连接类型（非 SEMI/ANTI 时按 inner_unique 处理）
+ * @param sjinfo      特殊连接信息
+ * @param restrictlist 连接限定条件列表
+ * @param semifactors 输出：半连接/反连接因子（见 pathnodes.h）
+ * @return 无
  */
 void
 compute_semi_anti_join_factors(PlannerInfo *root,
@@ -5241,6 +5696,11 @@ compute_semi_anti_join_factors(PlannerInfo *root,
  * unmatched outer tuple is cheap to process, whereas otherwise it's probably
  * expensive.
  */
+/**
+ * 功能：判断嵌套循环连接的内表路径是否为索引扫描且所有连接条件均作为内表索引条件使用；用于 SEMI/ANTI 成本估计。
+ * @param path 嵌套循环路径
+ * @return 若内表为索引扫描且所有 joinquals 均为内表 indexquals 则返回 true，否则 false
+ */
 static bool
 has_indexed_join_quals(NestPath *path)
 {
@@ -5334,6 +5794,13 @@ has_indexed_join_quals(NestPath *path)
  * output tuples are generated and passed through qpqual checking, it
  * seems OK to live with the approximation.
  */
+/**
+ * 功能：近似估计连接路径在应用给定限定条件后产生的元组数；用于归并/哈希连接的成本计算，采用各子句选择率乘积近似。
+ * @param root  规划器全局信息
+ * @param path  连接路径
+ * @param quals 限定条件列表（如 mergeclauses 或 hashclauses）
+ * @return 估计的通过限定条件的连接元组数
+ */
 static double
 approx_tuple_count(PlannerInfo *root, JoinPath *path, List *quals)
 {
@@ -5379,6 +5846,12 @@ approx_tuple_count(PlannerInfo *root, JoinPath *path, List *quals)
  *	width: the estimated average output tuple width in bytes.
  *	baserestrictcost: estimated cost of evaluating baserestrictinfo clauses.
  */
+/**
+ * 功能：设置基表的大小估计（行数、宽度、限制条件评估成本）；要求 rel 的 targetlist、restrictinfo 已构造且 rel->tuples 已设置。
+ * @param root 规划器全局信息
+ * @param rel  基表 RelOptInfo（输出：rows、width、baserestrictcost）
+ * @return 无
+ */
 void
 set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 {
@@ -5408,6 +5881,13 @@ set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel)
  * 'param_clauses' lists the additional join clauses to be used.
  *
  * set_baserel_size_estimates must have been applied already.
+ */
+/**
+ * 功能：对基表做参数化扫描时的行数估计；param_clauses 为额外使用的连接条件列表，需已调用 set_baserel_size_estimates。
+ * @param root         规划器全局信息
+ * @param rel          基表 RelOptInfo
+ * @param param_clauses 额外连接条件列表
+ * @return 参数化扫描的估计行数
  */
 double
 get_parameterized_baserel_size(PlannerInfo *root, RelOptInfo *rel,
@@ -5458,6 +5938,16 @@ get_parameterized_baserel_size(PlannerInfo *root, RelOptInfo *rel,
  * We set only the rows field here.  The reltarget field was already set by
  * build_joinrel_tlist, and baserestrictcost is not used for join rels.
  */
+/**
+ * 功能：设置连接关系的大小估计（仅设置 rows）；reltarget 由 build_joinrel_tlist 设置。
+ * @param root        规划器全局信息
+ * @param rel         连接关系 RelOptInfo（输出：rows）
+ * @param outer_rel   外表
+ * @param inner_rel   内表
+ * @param sjinfo      特殊连接信息
+ * @param restrictlist 连接限定条件列表
+ * @return 无
+ */
 void
 set_joinrel_size_estimates(PlannerInfo *root, RelOptInfo *rel,
 						   RelOptInfo *outer_rel,
@@ -5489,6 +5979,16 @@ set_joinrel_size_estimates(PlannerInfo *root, RelOptInfo *rel,
  * child paths).
  *
  * set_joinrel_size_estimates must have been applied already.
+ */
+/**
+ * 功能：对连接关系做参数化路径时的行数估计；restrict_clauses 为在此连接节点应用的连接条件，需已调用 set_joinrel_size_estimates。
+ * @param root             规划器全局信息
+ * @param rel              连接关系
+ * @param outer_path       外表路径
+ * @param inner_path       内表路径
+ * @param sjinfo           特殊连接信息
+ * @param restrict_clauses 在此连接节点应用的限定条件列表
+ * @return 参数化连接路径的估计行数
  */
 double
 get_parameterized_joinrel_size(PlannerInfo *root, RelOptInfo *rel,
@@ -5530,6 +6030,18 @@ get_parameterized_joinrel_size(PlannerInfo *root, RelOptInfo *rel,
  * outer_rel/inner_rel are the relations being joined, but they should be
  * assumed to have sizes outer_rows/inner_rows; those numbers might be less
  * than what rel->rows says, when we are considering parameterized paths.
+ */
+/**
+ * 功能：计算连接关系行数估计的公共逻辑；外表/内表按 outer_rows/inner_rows 计，考虑 FK 选择率与 restrictlist 选择率。
+ * @param root        规划器全局信息
+ * @param joinrel     连接关系
+ * @param outer_rel   外表
+ * @param inner_rel   内表
+ * @param outer_rows  外表行数（参数化时可能小于 outer_rel->rows）
+ * @param inner_rows  内表行数
+ * @param sjinfo      特殊连接信息
+ * @param restrictlist 连接限定条件列表
+ * @return 连接结果行数估计
  */
 static double
 calc_joinrel_size_estimate(PlannerInfo *root,
@@ -5680,6 +6192,15 @@ calc_joinrel_size_estimate(PlannerInfo *root,
  * independent falls down badly.  But even with single-column FKs, we may be
  * able to get a better answer when the pg_statistic stats are missing or out
  * of date.
+ */
+/**
+ * 功能：对外键相关连接条件做选择率估计；从 *restrictlist 中移除可匹配 FK 的子句并返回其综合选择率，无此类子句时返回 1.0。
+ * @param root         规划器全局信息
+ * @param outer_relids 外表 relid 集合
+ * @param inner_relids 内表 relid 集合
+ * @param sjinfo       特殊连接信息
+ * @param restrictlist 连接限定条件列表（输入/输出：会移除 FK 匹配子句）
+ * @return FK 相关子句的选择率，无则 1.0
  */
 static Selectivity
 get_foreign_key_join_selectivity(PlannerInfo *root,
@@ -5933,6 +6454,12 @@ get_foreign_key_join_selectivity(PlannerInfo *root,
  *
  * We set the same fields as set_baserel_size_estimates.
  */
+/**
+ * 功能：设置子查询基表的大小估计；从子查询 PlannerInfo 取数据，要求 rel 的 targetlist、restrictinfo 及子查询路径已就绪。
+ * @param root 规划器全局信息
+ * @param rel  子查询对应的基表 RelOptInfo（输出：与 set_baserel_size_estimates 相同字段）
+ * @return 无
+ */
 void
 set_subquery_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 {
@@ -6013,6 +6540,12 @@ set_subquery_size_estimates(PlannerInfo *root, RelOptInfo *rel)
  *
  * We set the same fields as set_baserel_size_estimates.
  */
+/**
+ * 功能：设置函数调用基表的大小估计；行数取各函数返回行数估计的最大值，要求 rel 的 targetlist、restrictinfo 已构造。
+ * @param root 规划器全局信息
+ * @param rel  函数基表 RelOptInfo（输出：与 set_baserel_size_estimates 相同字段）
+ * @return 无
+ */
 void
 set_function_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 {
@@ -6051,6 +6584,12 @@ set_function_size_estimates(PlannerInfo *root, RelOptInfo *rel)
  *
  * We set the same fields as set_tablefunc_size_estimates.
  */
+/**
+ * 功能：设置 tablefunc 基表的大小估计；tuples 固定为 100，要求 rel 的 targetlist、restrictinfo 已构造。
+ * @param root 规划器全局信息
+ * @param rel  tablefunc 基表 RelOptInfo（输出：与 set_baserel_size_estimates 相同字段）
+ * @return 无
+ */
 void
 set_tablefunc_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 {
@@ -6072,6 +6611,12 @@ set_tablefunc_size_estimates(PlannerInfo *root, RelOptInfo *rel)
  * already.
  *
  * We set the same fields as set_baserel_size_estimates.
+ */
+/**
+ * 功能：设置 VALUES 列表基表的大小估计；行数由 values_lists 长度确定，要求 rel 的 targetlist、restrictinfo 已构造。
+ * @param root 规划器全局信息
+ * @param rel  VALUES 基表 RelOptInfo（输出：与 set_baserel_size_estimates 相同字段）
+ * @return 无
  */
 void
 set_values_size_estimates(PlannerInfo *root, RelOptInfo *rel)
@@ -6104,6 +6649,13 @@ set_values_size_estimates(PlannerInfo *root, RelOptInfo *rel)
  * (if a regular CTE) or the non-recursive term (if a self-reference).
  *
  * We set the same fields as set_baserel_size_estimates.
+ */
+/**
+ * 功能：设置 CTE 引用基表的大小估计；常规 CTE 用 cte_rows，自引用时用 recursive_worktable_factor * cte_rows，要求 rel 已构造且 cte_rows 已提供。
+ * @param root     规划器全局信息
+ * @param rel      CTE 基表 RelOptInfo（输出：与 set_baserel_size_estimates 相同字段）
+ * @param cte_rows CTE 或非递归项行数估计
+ * @return 无
  */
 void
 set_cte_size_estimates(PlannerInfo *root, RelOptInfo *rel, double cte_rows)
@@ -6143,6 +6695,12 @@ set_cte_size_estimates(PlannerInfo *root, RelOptInfo *rel, double cte_rows)
  *
  * We set the same fields as set_baserel_size_estimates.
  */
+/**
+ * 功能：设置命名 tuplestore 引用基表的大小估计；行数来自 rte->enrtuples，未设置时用 1000，要求 rel 已构造。
+ * @param root 规划器全局信息
+ * @param rel  命名 tuplestore 基表 RelOptInfo（输出：与 set_baserel_size_estimates 相同字段）
+ * @return 无
+ */
 void
 set_namedtuplestore_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 {
@@ -6176,6 +6734,12 @@ set_namedtuplestore_size_estimates(PlannerInfo *root, RelOptInfo *rel)
  *
  * We set the same fields as set_baserel_size_estimates.
  */
+/**
+ * 功能：设置 RTE_RESULT 基表的大小估计；固定为单行（tuples=1），要求 rel 已构造。
+ * @param root 规划器全局信息
+ * @param rel  RTE_RESULT 基表 RelOptInfo（输出：与 set_baserel_size_estimates 相同字段）
+ * @return 无
+ */
 void
 set_result_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 {
@@ -6204,6 +6768,12 @@ set_result_size_estimates(PlannerInfo *root, RelOptInfo *rel)
  *
  * The rel's targetlist and restrictinfo list must have been constructed
  * already.
+ */
+/**
+ * 功能：设置外表基表的默认大小估计（rows 默认 1000，baserestrictcost 与 width）；实际由 FDW 的 GetForeignRelSize 后续修正。
+ * @param root 规划器全局信息
+ * @param rel  外表基表 RelOptInfo（输出：rows、baserestrictcost、width）
+ * @return 无
  */
 void
 set_foreign_size_estimates(PlannerInfo *root, RelOptInfo *rel)
@@ -6239,6 +6809,12 @@ set_foreign_size_estimates(PlannerInfo *root, RelOptInfo *rel)
  *
  * The per-attribute width estimates are cached for possible re-use while
  * building join relations or post-scan/join pathtargets.
+ */
+/**
+ * 功能：设置基表输出元组的估计宽度（各列宽度之和）及 reltarget->cost；并缓存每列宽度供后续使用。
+ * @param root 规划器全局信息
+ * @param rel  基表 RelOptInfo（输出：reltarget->width、reltarget->cost、attr_widths[]）
+ * @return 无
  */
 static void
 set_rel_width(PlannerInfo *root, RelOptInfo *rel)
@@ -6397,6 +6973,12 @@ set_rel_width(PlannerInfo *root, RelOptInfo *rel)
  * estimates.  Present early-planning uses of PathTargets don't need accurate
  * widths badly enough to justify going to the catalogs for better data.
  */
+/**
+ * 功能：设置 PathTarget 的评估成本与输出宽度；通常在各基表已执行 set_rel_width 后调用，返回传入的 target。
+ * @param root   规划器全局信息
+ * @param target 路径目标（输出：cost、width）
+ * @return 传入的 target 指针
+ */
 PathTarget *
 set_pathtarget_cost_width(PlannerInfo *root, PathTarget *target)
 {
@@ -6434,6 +7016,12 @@ set_pathtarget_cost_width(PlannerInfo *root, PathTarget *target)
  *		Estimate the width of the given expr attempting to use the width
  *		cached in a Var's owning RelOptInfo, else fallback on the type's
  *		average width when unable to or when the given Node is not a Var.
+ */
+/**
+ * 功能：估计表达式的输出宽度；优先使用 Var 所属 RelOptInfo 的缓存宽度，否则用类型平均宽度。
+ * @param root 规划器全局信息
+ * @param expr 表达式节点
+ * @return 估计宽度（字节）
  */
 static int32
 get_expr_width(PlannerInfo *root, const Node *expr)
@@ -6483,6 +7071,12 @@ get_expr_width(PlannerInfo *root, const Node *expr)
  *	  Estimate the storage space in bytes for a given number of tuples
  *	  of a given width (size in bytes).
  */
+/**
+ * 功能：估计给定元组数与元组宽度下的存储字节数（含 MAXALIGN 与 HeapTupleHeader）。
+ * @param tuples 元组数
+ * @param width  元组宽度（字节）
+ * @return 估计的字节数
+ */
 static double
 relation_byte_size(double tuples, int width)
 {
@@ -6494,6 +7088,12 @@ relation_byte_size(double tuples, int width)
  *	  Returns an estimate of the number of pages covered by a given
  *	  number of tuples of a given width (size in bytes).
  */
+/**
+ * 功能：估计给定元组数与宽度所占据的页数（relation_byte_size / BLCKSZ 向上取整）。
+ * @param tuples 元组数
+ * @param width  元组宽度（字节）
+ * @return 估计的页数
+ */
 static double
 page_size(double tuples, int width)
 {
@@ -6503,6 +7103,11 @@ page_size(double tuples, int width)
 /*
  * Estimate the fraction of the work that each worker will do given the
  * number of workers budgeted for the path.
+ */
+/**
+ * 功能：根据路径的并行 worker 数估计“并行除数”，用于将总行数/成本分摊到各 worker；若启用 parallel_leader_participation 则计入 leader 贡献。
+ * @param path 带 parallel_workers 的路径
+ * @return 并行除数（>= parallel_workers）
  */
 static double
 get_parallel_divisor(Path *path)
@@ -6543,6 +7148,16 @@ get_parallel_divisor(Path *path)
  *
  * If cost_p isn't NULL, the indexTotalCost estimate is returned in *cost_p.
  * If tuples_p isn't NULL, the tuples_fetched estimate is returned in *tuples_p.
+ */
+/**
+ * 功能：估计位图堆扫描从堆读取的页数；同时可返回索引总成本与获取的元组数，考虑 loop_count 对缓存的影响。
+ * @param root       规划器全局信息
+ * @param baserel    被扫描的基表
+ * @param bitmapqual 位图条件树（IndexPath/BitmapAndPath/BitmapOrPath）
+ * @param loop_count 索引扫描重复次数（用于缓存估计）
+ * @param cost_p    输出：索引总成本（可为 NULL）
+ * @param tuples_p  输出：获取的元组数估计（可为 NULL）
+ * @return 从堆读取的页数估计
  */
 double
 compute_bitmap_pages(PlannerInfo *root, RelOptInfo *baserel,
@@ -6654,6 +7269,11 @@ compute_bitmap_pages(PlannerInfo *root, RelOptInfo *baserel,
  * contribution in addition to the number of workers.  Accordingly, when
  * estimating the number of rows for gather (merge) nodes, we multiply the rows
  * per worker by the same parallel_divisor to undo the division.
+ */
+/**
+ * 功能：估计 Gather/Gather Merge 节点的输出行数；用 path->rows * get_parallel_divisor(path) 还原总行数。
+ * @param path 部分路径（parallel_workers > 0）
+ * @return 估计的 Gather 输出行数
  */
 double
 compute_gather_rows(Path *path)

@@ -2372,6 +2372,12 @@ rowcomparesel(PlannerInfo *root,
 /*
  *		eqjoinsel		- Join selectivity of "="
  */
+/**
+ * 此函数计算连接条件为 "=" 的连接选择性。它首先获取连接条件中的变量和常量，并检查它们的统计信息。
+ * 如果统计信息可用，它将使用这些信息来估计连接选择性。否则，它将使用默认的选择性值。
+ * @param fcinfo
+ * @return
+ */
 Datum
 eqjoinsel(PG_FUNCTION_ARGS)
 {
